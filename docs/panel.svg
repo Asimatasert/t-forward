@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="764" viewBox="0 0 1360 764" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d98e4a"/><stop offset="1" stop-color="#b06a2e"/>
+    </linearGradient>
+    <linearGradient id="txfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c98136" stop-opacity="0.28"/><stop offset="1" stop-color="#c98136" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rxfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5e97d1" stop-opacity="0.28"/><stop offset="1" stop-color="#5e97d1" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1360" height="764" fill="#10141a"/>
+
+  <!-- ================= map background + grid ================= -->
+  <rect x="66" y="52" width="944" height="584" fill="#0d1117"/>
+  <g stroke="#2a3340" stroke-opacity="0.28">
+    <line x1="156" y1="52" x2="156" y2="636"/><line x1="246" y1="52" x2="246" y2="636"/>
+    <line x1="336" y1="52" x2="336" y2="636"/><line x1="426" y1="52" x2="426" y2="636"/>
+    <line x1="516" y1="52" x2="516" y2="636"/><line x1="606" y1="52" x2="606" y2="636"/>
+    <line x1="696" y1="52" x2="696" y2="636"/><line x1="786" y1="52" x2="786" y2="636"/>
+    <line x1="876" y1="52" x2="876" y2="636"/><line x1="966" y1="52" x2="966" y2="636"/>
+  </g>
+
+  <!-- ================= edges ================= -->
+  <g fill="none" stroke="#2a3340" stroke-width="1.4">
+    <path d="M210,328 C300,240 300,160 330,160"/>
+    <path d="M210,328 C300,300 300,280 330,280"/>
+    <path d="M210,328 C300,345 300,370 330,370"/>
+    <path d="M710,160 C760,120 780,127 820,127"/>
+    <path d="M710,160 C760,180 780,200 820,200"/>
+    <path d="M480,280 C640,282 700,282 820,282"/>
+    <path d="M480,370 C520,370 520,370 555,370"/>
+    <path d="M635,370 C700,370 700,370 745,370"/>
+    <path d="M825,370 C860,367 880,367 820,367"/>
+  </g>
+  <path d="M480,160 C520,160 520,160 560,160" fill="none" stroke="#7fb0d6" stroke-width="1.5"/>
+  <path d="M210,328 C300,430 300,452 330,452" fill="none" stroke="#2a3340" stroke-width="1" stroke-dasharray="2 7" stroke-opacity="0.5"/>
+  <path d="M474,452 C640,452 780,452 820,450" fill="none" stroke="#2a3340" stroke-width="1" stroke-dasharray="2 7" stroke-opacity="0.5"/>
+  <!-- flow particles -->
+  <g>
+    <circle cx="285" cy="250" r="3" fill="#c98136"/><circle cx="300" cy="215" r="3" fill="#c98136"/>
+    <circle cx="270" cy="300" r="2.4" fill="#5e97d1"/><circle cx="520" cy="160" r="3" fill="#c98136"/>
+    <circle cx="640" cy="160" r="2.6" fill="#5e97d1"/><circle cx="770" cy="140" r="3" fill="#c98136"/>
+    <circle cx="780" cy="195" r="2.4" fill="#5e97d1"/><circle cx="600" cy="282" r="2.6" fill="#c98136"/>
+    <circle cx="720" cy="282" r="2.4" fill="#5e97d1"/><circle cx="300" cy="360" r="2.6" fill="#c98136"/>
+    <circle cx="600" cy="370" r="2.4" fill="#5e97d1"/><circle cx="700" cy="370" r="2.6" fill="#c98136"/>
+  </g>
+
+  <!-- YOU -->
+  <rect x="90" y="300" width="120" height="56" rx="8" fill="#222a35" stroke="#d98e4a" stroke-width="1.5"/>
+  <text x="104" y="325" fill="#d98e4a" font-size="13" font-weight="700">YOU</text>
+  <text x="104" y="342" fill="#5c6675" font-size="10">this machine</text>
+
+  <!-- tunnel nodes -->
+  <g>
+    <rect x="330" y="135" width="150" height="50" rx="8" fill="#1a2029" stroke="#d98e4a" stroke-width="1.4"/>
+    <circle cx="343" cy="152" r="3.4" fill="#4cc38a"/><text x="356" y="156" fill="#e8ecf1" font-size="12.5" font-weight="700">office</text>
+    <text x="343" y="174" fill="#5c6675" font-size="10">VPN &#8593;50.8 &#8595;137.7 KB/s</text>
+
+    <rect x="330" y="255" width="150" height="50" rx="8" fill="#1a2029" stroke="#d98e4a" stroke-width="1.4"/>
+    <circle cx="343" cy="272" r="3.4" fill="#4cc38a"/><text x="356" y="276" fill="#e8ecf1" font-size="12.5" font-weight="700">warehouse</text>
+    <text x="343" y="294" fill="#5c6675" font-size="10">VPN &#8593;17.6 &#8595;39.1 KB/s</text>
+
+    <rect x="330" y="345" width="150" height="50" rx="8" fill="#1a2029" stroke="#7fb0d6" stroke-width="1.4"/>
+    <circle cx="343" cy="362" r="3.4" fill="#4cc38a"/><text x="356" y="366" fill="#e8ecf1" font-size="12.5" font-weight="700">bastion</text>
+    <text x="343" y="384" fill="#5c6675" font-size="10">SSH &#8593;8.8 &#8595;21.5 KB/s</text>
+
+    <rect x="330" y="430" width="144" height="44" rx="8" fill="#1a2029" stroke="#2a3340" opacity="0.6"/>
+    <circle cx="343" cy="447" r="3.2" fill="#5c6675"/><text x="356" y="451" fill="#e8ecf1" font-size="12.5" font-weight="700" opacity="0.7">printer</text>
+    <text x="343" y="466" fill="#5c6675" font-size="10">LOCAL OFF</text>
+  </g>
+
+  <!-- subnet node (virtual segment) -->
+  <rect x="560" y="138" width="150" height="46" rx="8" fill="#7fb0d6" fill-opacity="0.08" stroke="#7fb0d6" stroke-opacity="0.55" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <circle cx="572" cy="153" r="3" fill="#7fb0d6"/><text x="582" y="157" fill="#7fb0d6" font-size="11.5" font-weight="700">10.0.0.0/16</text>
+  <text x="572" y="174" fill="#5c6675" font-size="10">2 hosts &#183; you 10.0.6.12</text>
+
+  <!-- jump-chain nodes -->
+  <rect x="555" y="350" width="80" height="40" rx="8" fill="#1a2029" stroke="#2a3340"/>
+  <text x="566" y="367" fill="#e8ecf1" font-size="11" font-weight="700">10.0.0.10</text><text x="566" y="381" fill="#5c6675" font-size="10">jump</text>
+  <rect x="745" y="350" width="80" height="40" rx="8" fill="#1a2029" stroke="#7fb0d6" stroke-width="1.3"/>
+  <text x="756" y="367" fill="#e8ecf1" font-size="11" font-weight="700">10.0.0.30</text><text x="756" y="381" fill="#5c6675" font-size="10">landing</text>
+
+  <!-- target host nodes -->
+  <g font-size="10">
+    <rect x="820" y="93" width="164" height="66" rx="8" fill="#1a2029" stroke="#4cc38a"/>
+    <text x="832" y="108" fill="#e8ecf1" font-size="11" font-weight="700">app server</text><text x="832" y="122" fill="#8a94a3">10.0.0.20</text>
+    <text x="832" y="136" fill="#5c6675">(ssh) :22 &#8592; 2222</text><text x="832" y="149" fill="#5c6675">(http) :80 &#8592; 32801 &#183; (pg) :5432</text>
+
+    <rect x="820" y="176" width="164" height="46" rx="8" fill="#1a2029" stroke="#2a3340"/>
+    <text x="832" y="191" fill="#e8ecf1" font-size="11" font-weight="700">bastion</text><text x="832" y="205" fill="#8a94a3">10.0.0.21</text>
+    <text x="832" y="218" fill="#5c6675">(ssh) :22 &#8592; 32803</text>
+
+    <rect x="820" y="258" width="164" height="48" rx="8" fill="#1a2029" stroke="#2a3340"/>
+    <text x="832" y="273" fill="#e8ecf1" font-size="11" font-weight="700">erp</text><text x="832" y="287" fill="#8a94a3">10.2.0.5</text>
+    <text x="832" y="300" fill="#5c6675">(https) :443 &#8592; 33001</text>
+
+    <rect x="820" y="345" width="164" height="46" rx="8" fill="#1a2029" stroke="#2a3340"/>
+    <text x="832" y="360" fill="#e8ecf1" font-size="11" font-weight="700">deep db</text><text x="832" y="374" fill="#8a94a3">10.0.0.40</text>
+    <text x="832" y="387" fill="#5c6675">(postgres) :5432 &#8592; 5433</text>
+
+    <rect x="820" y="430" width="164" height="42" rx="8" fill="#1a2029" stroke="#2a3340" opacity="0.5"/>
+    <text x="832" y="449" fill="#e8ecf1" font-size="11" font-weight="700" opacity="0.7">label printer</text><text x="832" y="463" fill="#5c6675">192.168.1.77</text>
+  </g>
+
+  <!-- tag filter bar -->
+  <g font-size="10">
+    <rect x="74" y="66" width="34" height="18" rx="9" fill="#4cc38a" fill-opacity="0.12" stroke="#4cc38a"/><text x="82" y="79" fill="#4cc38a">all</text>
+    <rect x="114" y="66" width="46" height="18" rx="9" fill="none" stroke="#2a3340"/><text x="122" y="79" fill="#5c6675">online</text>
+    <rect x="166" y="66" width="48" height="18" rx="9" fill="none" stroke="#2a3340"/><text x="174" y="79" fill="#5c6675">offline</text>
+    <rect x="228" y="66" width="66" height="18" rx="9" fill="none" stroke="#2a3340"/><text x="236" y="79" fill="#8a94a3">#example</text>
+    <rect x="300" y="66" width="46" height="18" rx="9" fill="none" stroke="#2a3340"/><text x="308" y="79" fill="#8a94a3">#prod</text>
+    <rect x="352" y="66" width="40" height="18" rx="9" fill="none" stroke="#2a3340"/><text x="360" y="79" fill="#8a94a3">#ssh</text>
+  </g>
+  <!-- legend -->
+  <g font-size="10" fill="#8a94a3">
+    <rect x="905" y="58" width="100" height="18" rx="5" fill="#10141a" fill-opacity="0.85" stroke="#2a3340"/>
+    <rect x="912" y="65" width="12" height="3" fill="#c98136"/><text x="928" y="70">TX</text>
+    <rect x="948" y="65" width="12" height="3" fill="#5e97d1"/><text x="964" y="70">RX</text>
+  </g>
+
+  <!-- ================= top bar ================= -->
+  <rect x="0" y="0" width="1360" height="52" fill="#1a2029"/>
+  <line x1="0" y1="52" x2="1360" y2="52" stroke="#2a3340"/>
+  <rect x="14" y="15" width="22" height="22" rx="5" fill="url(#mark)"/><text x="20" y="31" fill="#16100a" font-size="12" font-weight="800">tf</text>
+  <text x="46" y="31" fill="#e8ecf1" font-size="15" font-weight="700">t-forward</text>
+  <!-- view toggle -->
+  <rect x="127" y="12" width="118" height="28" rx="6" fill="#222a35" stroke="#2a3340"/>
+  <rect x="127" y="12" width="66" height="28" rx="6" fill="#d98e4a"/><text x="143" y="30" fill="#16100a" font-size="12" font-weight="700">Tunnels</text>
+  <text x="205" y="30" fill="#8a94a3" font-size="12">LAN</text>
+  <circle cx="266" cy="26" r="3.5" fill="#4cc38a"/><text x="278" y="30" fill="#8a94a3" font-size="11">docker &#183; orbstack</text>
+  <text x="1035" y="26" fill="#8a94a3" font-size="12">&#9632; TX <tspan fill="#e8ecf1">77.1 KB/s</tspan></text>
+  <text x="1148" y="26" fill="#8a94a3" font-size="12">&#9632; RX <tspan fill="#e8ecf1">198.2 KB/s</tspan></text>
+  <rect x="1262" y="12" width="90" height="28" rx="5" fill="#222a35" stroke="#2a3340"/><text x="1276" y="30" fill="#e8ecf1" font-size="12">New tunnel</text>
+
+  <!-- ================= left rail ================= -->
+  <rect x="0" y="52" width="66" height="712" fill="#1a2029"/>
+  <line x1="66" y1="52" x2="66" y2="764" stroke="#2a3340"/>
+  <rect x="0" y="61" width="3" height="42" rx="2" fill="#d98e4a"/>
+  <g text-anchor="middle" font-size="11" font-weight="700">
+    <text x="33" y="76" fill="#e8ecf1">ALL</text><text x="33" y="90" fill="#d98e4a" font-size="10" font-weight="400">3/4</text>
+    <text x="33" y="124" fill="#5c6675">VPN</text><text x="33" y="138" fill="#5c6675" font-size="10" font-weight="400">2/2</text>
+    <text x="33" y="172" fill="#5c6675">SSH</text><text x="33" y="186" fill="#5c6675" font-size="10" font-weight="400">1/1</text>
+    <text x="33" y="220" fill="#5c6675">RLY</text><text x="33" y="234" fill="#5c6675" font-size="10" font-weight="400">0/1</text>
+  </g>
+
+  <!-- ================= events console ================= -->
+  <rect x="66" y="636" width="944" height="128" fill="#10141a"/>
+  <line x1="66" y1="636" x2="1010" y2="636" stroke="#2a3340"/>
+  <rect x="66" y="636" width="944" height="26" fill="#1a2029"/>
+  <text x="80" y="653" fill="#8a94a3" font-size="10.5" letter-spacing="1">&#9662; NETWORK EVENTS <tspan fill="#5c6675">&#183; 5/5</tspan></text>
+  <g font-size="11">
+    <text x="80" y="682" fill="#5c6675">20:02:41</text><text x="150" y="682" fill="#4cc38a" font-size="9.5">CONN</text><text x="210" y="682" fill="#7fb0d6">office</text><text x="290" y="682" fill="#8a94a3">new connection 127.0.0.1 -&gt; :2222 (ssh)</text>
+    <text x="80" y="702" fill="#5c6675">20:02:41</text><text x="150" y="702" fill="#d98e4a" font-size="9.5">TUNNEL</text><text x="210" y="702" fill="#7fb0d6">office</text><text x="290" y="702" fill="#8a94a3">ESP tunnel established, MTU 1400</text>
+    <text x="80" y="722" fill="#5c6675">20:02:41</text><text x="150" y="722" fill="#4cc38a" font-size="9.5">CONN</text><text x="210" y="722" fill="#7fb0d6">bastion</text><text x="290" y="722" fill="#8a94a3">new connection 127.0.0.1 -&gt; :5433 (postgres)</text>
+    <text x="80" y="742" fill="#5c6675">20:02:41</text><text x="150" y="742" fill="#e5b85c" font-size="9.5">AUTH</text><text x="210" y="742" fill="#7fb0d6">warehouse</text><text x="290" y="742" fill="#8a94a3">server certificate pinned OK</text>
+  </g>
+
+  <!-- ================= right panel ================= -->
+  <rect x="1010" y="52" width="350" height="712" fill="#10141a"/>
+  <line x1="1010" y1="52" x2="1010" y2="764" stroke="#2a3340"/>
+  <g>
+    <text x="1032" y="82" fill="#e8ecf1" font-size="19" font-weight="700">office</text>
+    <rect x="1096" y="68" width="34" height="16" rx="4" fill="none" stroke="#d98e4a" stroke-opacity="0.4"/><text x="1102" y="80" fill="#d98e4a" font-size="9" font-weight="700">VPN</text>
+    <text x="1032" y="102" fill="#8a94a3" font-size="12.5">Example VPN</text>
+    <rect x="1032" y="112" width="104" height="20" rx="10" fill="#4cc38a" fill-opacity="0.12" stroke="#4cc38a" stroke-opacity="0.35"/><text x="1044" y="126" fill="#4cc38a" font-size="10.5">&#9679; CONNECTED</text>
+    <rect x="1032" y="142" width="52" height="26" rx="5" fill="none" stroke="#e5645c"/><text x="1044" y="159" fill="#e5645c" font-size="12">Down</text>
+
+    <text x="1032" y="192" fill="#5c6675" font-size="9.5" letter-spacing="1.4">FLAGS</text>
+    <rect x="1032" y="200" width="86" height="18" rx="3" fill="#7fb0d6" fill-opacity="0.12"/><text x="1040" y="213" fill="#7fb0d6" font-size="9">SOCKS 1080</text>
+
+    <text x="1032" y="240" fill="#5c6675" font-size="9.5" letter-spacing="1.4">TAGS</text>
+    <rect x="1032" y="248" width="62" height="18" rx="9" fill="#1a2029" stroke="#2a3340"/><text x="1041" y="261" fill="#8a94a3" font-size="10">#example</text>
+    <rect x="1100" y="248" width="46" height="18" rx="9" fill="#1a2029" stroke="#2a3340"/><text x="1109" y="261" fill="#8a94a3" font-size="10">#prod</text>
+
+    <text x="1032" y="292" fill="#5c6675" font-size="9.5" letter-spacing="1.4">ON THE VPN</text>
+    <rect x="1032" y="300" width="304" height="52" rx="8" fill="none" stroke="#2a3340"/>
+    <text x="1044" y="322" fill="#8a94a3" font-size="11">our IP</text><text x="1324" y="322" fill="#7fb0d6" font-size="11" text-anchor="end">10.0.6.12</text>
+    <text x="1044" y="342" fill="#8a94a3" font-size="11">subnet</text><text x="1096" y="342" fill="#8a94a3" font-size="10">10.0.0.0/16 &#183; hosts talk directly</text>
+
+    <text x="1032" y="380" fill="#5c6675" font-size="9.5" letter-spacing="1.4">THROUGHPUT — LAST 90 S</text>
+    <rect x="1032" y="388" width="304" height="96" rx="8" fill="#1a2029" stroke="#2a3340"/>
+    <path d="M1044,470 L1230,470 L1250,414 L1320,414 L1320,472 L1044,472 Z" fill="url(#rxfill)"/>
+    <path d="M1044,470 L1230,470 L1250,414 L1320,414" fill="none" stroke="#5e97d1" stroke-width="2"/>
+    <path d="M1044,476 L1240,476 L1258,452 L1320,452 L1320,478 L1044,478 Z" fill="url(#txfill)"/>
+    <path d="M1044,476 L1240,476 L1258,452 L1320,452" fill="none" stroke="#c98136" stroke-width="2"/>
+
+    <text x="1032" y="512" fill="#5c6675" font-size="9.5" letter-spacing="1.4">PUBLISHED PORTS</text>
+    <rect x="1032" y="520" width="304" height="150" rx="8" fill="none" stroke="#2a3340"/>
+    <g font-size="11">
+      <text x="1044" y="540" fill="#d98e4a" font-size="10">(ssh)</text><text x="1092" y="540" fill="#e8ecf1">127.0.0.1:2222</text><text x="1200" y="540" fill="#5c6675">&#8594; :22</text>
+      <rect x="1280" y="530" width="44" height="16" rx="4" fill="#222a35" stroke="#2a3340"/><text x="1289" y="542" fill="#8a94a3" font-size="9.5">copy</text>
+      <line x1="1044" y1="552" x2="1324" y2="552" stroke="#202834"/>
+      <text x="1044" y="570" fill="#d98e4a" font-size="10">(http)</text><text x="1092" y="570" fill="#e8ecf1">127.0.0.1:32801</text><text x="1210" y="570" fill="#5c6675">&#8594; :80</text>
+      <rect x="1280" y="560" width="44" height="16" rx="4" fill="#222a35" stroke="#2a3340"/><text x="1289" y="572" fill="#8a94a3" font-size="9.5">copy</text>
+      <line x1="1044" y1="582" x2="1324" y2="582" stroke="#202834"/>
+      <text x="1044" y="600" fill="#d98e4a" font-size="10">(postgres)</text><text x="1100" y="600" fill="#e8ecf1" font-size="10">127.0.0.1:32802</text><text x="1216" y="600" fill="#5c6675" font-size="10">&#8594; :5432</text>
+      <rect x="1280" y="590" width="44" height="16" rx="4" fill="#222a35" stroke="#2a3340"/><text x="1289" y="602" fill="#8a94a3" font-size="9.5">copy</text>
+      <line x1="1044" y1="612" x2="1324" y2="612" stroke="#202834"/>
+      <text x="1044" y="630" fill="#d98e4a" font-size="10">(ssh)</text><text x="1092" y="630" fill="#e8ecf1">127.0.0.1:32803</text><text x="1210" y="630" fill="#5c6675">&#8594; :22</text>
+      <rect x="1280" y="620" width="44" height="16" rx="4" fill="#222a35" stroke="#2a3340"/><text x="1289" y="632" fill="#8a94a3" font-size="9.5">copy</text>
+      <line x1="1044" y1="642" x2="1324" y2="642" stroke="#202834"/>
+      <text x="1044" y="660" fill="#e8ecf1" font-size="10">127.0.0.1:1080</text><text x="1160" y="660" fill="#5c6675" font-size="10">&#8594; far side (any host)</text><text x="1300" y="660" fill="#5c6675" font-size="9">socks5</text>
+    </g>
+  </g>
+</svg>

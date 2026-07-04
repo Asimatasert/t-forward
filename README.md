@@ -5,6 +5,10 @@ relays as small YAML files, bring them up with one command (each in its own
 isolated container), and reach everything through stable `localhost` ports — with
 an optional live web panel that maps your tunnels and even discovers your LAN.
 
+![t-forward web panel — live topology map, per-tunnel throughput, subnet & jump-chain nodes, and inspectable published ports](docs/panel.svg)
+
+<sub>The web panel's tunnel map (all data shown is synthetic).</sub>
+
 One tool, three tunnel types:
 
 | `type` | What runs in the container | Use it for |
