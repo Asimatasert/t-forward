@@ -1,0 +1,53 @@
+# t-forward VPN definition. One YAML file per tunnel in ~/.config/t-forward/conf.d/;
+# the file name (without .yaml) is the tunnel name: conf.d/office.yaml -> `t-forward up office`.
+# Read with yq — it is never sourced, so values need no shell quoting.
+
+name: Example VPN              # optional display name (defaults to the file name)
+type: vpn                      # vpn | ssh | local
+tags: [example]               # optional; used by the panel's filters
+
+vpn:
+  server: vpn.example.com:10443   # [https://]host[:port]
+  protocol: fortinet              # fortinet | gp | anyconnect | nc | pulse | f5 | array
+  user: username1
+  password: password1             # omit -> prompted at connect time
+  servercert: pin-sha256:...      # optional; on a mismatch the log prints the real pin
+  authgroup: ""                   # optional
+  totp: false                     # true -> prompted for a code after the password is
+                                  #         sent (the SMS / mail / Telegram flow)
+  totp_secret: ""                 # optional base32 secret -> code generated automatically
+
+socks: 1080                    # optional SOCKS5 proxy port ("any" = random free port)
+# restart: true                # optional: auto-reconnect after crash/reboot
+
+# Forwards are grouped by host: each host is written once, its forwards nested
+# under it, and every forward carries its own service/note right here.
+hosts:
+  - ip: 10.0.0.20
+    name: app server
+    tags: [db, web]
+    forwards:
+      - { remote: 22,   local: any,  service: ssh, user: root, note: admin access }
+      - { remote: 80,   local: any }                 # service auto-detected (http)
+      - { remote: 5432, local: any,  service: postgres, user: postgres }
+      - { remote: 8080, local: 0.0.0.0:8080 }        # bind on the LAN, not just localhost
+  - ip: 10.0.0.21
+    name: bastion
+    forwards:
+      - { remote: 22, local: 2205, service: ssh, user: username1 }
+
+# remote = the server's port; local = your localhost port (a number, "any" for an
+#          auto-picked free port, or BIND:PORT). service is auto-detected from the
+#          remote port when omitted (22->ssh, 80->http, 5432->postgres, …); user
+#          feeds the panel's ready-to-run copy string ("ssh -p 2205 username1@127.0.0.1").
+
+# Optional annotations for the VPN subnets the tunnel discovers at runtime. The
+# CIDR is learned live; this just labels it in the panel's topology map.
+subnets:
+  - { cidr: 10.0.0.0/16, label: office LAN, tags: [dmz] }
+
+# TOTP automation (no secret needed) — all wrap `t-forward code`:
+#   webhook : POST /totp/<name> {code} to the web daemon (phone shortcut, bot, …)
+#   command : totp_command runs when the tunnel starts waiting; the first 4-8 digit
+#             run in its stdout is delivered as the code.
+# totp_command: my-sms-bridge --latest

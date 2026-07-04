@@ -1,0 +1,30 @@
+# SSH tunnel: forwards ride an `ssh -N` connection, optionally chaining through
+# several jump hosts (ssh ProxyJump). The forwards resolve from the last hop.
+name: DB via bastion
+type: ssh
+tags: [ssh, example]
+
+ssh:
+  host: 10.0.0.30              # the host you finally land on (forwards resolve here)
+  user: username1
+  port: 22
+  key: ~/.ssh/id_ed25519        # key auth (required if `jump` is set); or omit for a
+                               # password prompt on a single-hop tunnel
+  # Multi-hop chain: ordered jump hosts BEFORE `host`. Each is "[user@]host[:port]".
+  # This makes ssh do:  you -> 10.0.0.10 -> 10.0.0.30 (host) -> the forwards below.
+  jump:
+    - 10.0.0.10
+    - admin@10.0.0.20:2222
+
+socks: 1080                    # optional: ssh -D dynamic proxy
+
+# Hosts as seen FROM the landing host, forwarded to your localhost.
+hosts:
+  - ip: 10.0.0.40
+    name: deep db
+    forwards:
+      - { remote: 5432, local: 5433, service: postgres }
+  - ip: 10.0.0.30
+    name: landing host
+    forwards:
+      - { remote: 6379, local: any, service: redis }

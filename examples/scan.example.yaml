@@ -1,0 +1,27 @@
+# Network discovery config — lives at ~/.config/t-forward/scan.yaml (NOT conf.d/).
+# The web daemon scans the listed interfaces with nmap (connect-scan, no root),
+# caches the result, and shows reachable devices + open ports on the panel's
+# "LAN" canvas. From there you can forward any discovered port to localhost.
+#
+# Requires the `nmap` binary on the host.
+
+enabled: true            # master switch for scanning
+interval: 600            # seconds between automatic scans (0 -> default 300)
+
+# Which interfaces to scan. A bare name derives the subnet from the interface's
+# own address; use an object to pin an explicit CIDR (e.g. a different segment
+# reachable off that link).
+interfaces:
+  - en0
+  # - { name: en1, cidr: 10.0.0.0/24 }
+
+# Ports to probe on each live host. Omit to use the built-in common set
+# (22, 80, 443, 3306, 3389, 5432, 6379, 8080, 445, 139, …).
+# ports: [22, 80, 443, 8080, 5432, 6379]
+
+# Optional: also cache the latest snapshot in Redis via redis-cli (survives
+# restarts, shareable). Empty/absent = built-in cache only (memory + JSON file
+# at ~/.config/t-forward/.scan-cache.json).
+# redis: 127.0.0.1:6379
+
+# persist: true          # write the JSON cache file (default true)

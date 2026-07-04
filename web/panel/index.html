@@ -1,0 +1,2058 @@
+<meta name="referrer" content="no-referrer">
+<title>t-forward — Tunnel Map</title>
+<style>
+  :root {
+    --bg: #10141a;
+    --bg-canvas: #0d1117;
+    --raise: #1a2029;
+    --raise-2: #222a35;
+    --line: #2a3340;
+    --line-soft: #202834;
+    --text: #e8ecf1;
+    --dim: #8a94a3;
+    --faint: #5c6675;
+    --copper: #d98e4a;
+    --copper-soft: rgba(217,142,74,0.14);
+    --steel: #7fb0d6;
+    --steel-soft: rgba(127,176,214,0.12);
+    --tx: #c98136;   /* chart/particle series — validated on dark surface */
+    --rx: #5e97d1;
+    --ok: #4cc38a;
+    --ok-soft: rgba(76,195,138,0.12);
+    --warn: #e5b85c;
+    --warn-soft: rgba(229,184,92,0.12);
+    --danger: #e5645c;
+    --danger-soft: rgba(229,100,92,0.12);
+    --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+  button { font: inherit; cursor: pointer; }
+  input { font: inherit; }
+  ::selection { background: var(--copper-soft); }
+
+  /* slim, unobtrusive scrollbars everywhere */
+  * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+  /* ============ top bar ============ */
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 16px; height: 52px; flex: none;
+    border-bottom: 1px solid var(--line);
+    background: var(--raise);
+  }
+  .brand { font-family: var(--mono); font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 22px; height: 22px; border-radius: 5px;
+    background: linear-gradient(135deg, var(--copper), #b06a2e);
+    display: grid; place-items: center;
+    color: #16100a; font-size: 12px; font-weight: 800;
+  }
+  .chip {
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; white-space: nowrap;
+  }
+  .chip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+  .spacer { flex: 1; }
+  .throughput {
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+    font-variant-numeric: tabular-nums; display: flex; gap: 14px; white-space: nowrap;
+  }
+  .throughput .v { color: var(--text); }
+  .throughput .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .btn {
+    font-family: var(--mono); font-size: 12px; padding: 6px 13px;
+    border-radius: 5px; border: 1px solid var(--line);
+    background: var(--raise-2); color: var(--text);
+    transition: border-color .15s, background .15s;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--faint); }
+  .btn:focus-visible, .tab:focus-visible, .code-input:focus-visible,
+  .ev-search:focus-visible, .fchip:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+  .btn.primary { background: var(--copper); border-color: var(--copper); color: #16100a; font-weight: 700; }
+  .btn.primary:hover { background: #e39c5c; }
+  .btn.danger-ghost { color: var(--danger); }
+  .btn.danger-ghost:hover { border-color: var(--danger); background: var(--danger-soft); }
+  /* top-level view switch: Tunnels | LAN — two genuinely separate canvases */
+  .viewseg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .vbtn {
+    font-family: var(--mono); font-size: 12px; padding: 6px 15px;
+    background: var(--raise-2); color: var(--dim);
+    border: none; border-right: 1px solid var(--line);
+  }
+  .vbtn:last-child { border-right: none; }
+  .vbtn:hover:not(.active) { color: var(--text); }
+  .vbtn.active { background: var(--copper); color: #16100a; font-weight: 700; }
+  @media (max-width: 900px) { .topbar .chip, .topbar .btn:not(.danger-ghost) { display: none; } }
+
+  /* ============ shell ============ */
+  .shell { display: flex; height: calc(100vh - 52px); min-height: 0; }
+
+  /* ---- tab rail ---- */
+  .tabrail {
+    width: 66px; flex: none;
+    border-right: 1px solid var(--line);
+    background: var(--raise);
+    display: flex; flex-direction: column;
+    padding: 10px 0; gap: 4px;
+  }
+  .tab {
+    position: relative;
+    background: none; border: none; color: var(--faint);
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    padding: 12px 0 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .tab .n { font-size: 10px; font-weight: 400; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .tab:hover { color: var(--dim); }
+  .tab.active { color: var(--text); }
+  .tab.active::before {
+    content: ""; position: absolute; left: 0; top: 9px; bottom: 9px;
+    width: 3px; border-radius: 0 2px 2px 0; background: var(--copper);
+  }
+  .tab.active .n { color: var(--copper); }
+
+  /* ---- middle column: map + events ---- */
+  .mid { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .map-wrap { flex: 1; position: relative; min-height: 0; background: var(--bg-canvas); overflow: hidden; }
+  .map-scroll { position: absolute; inset: 0; overflow: auto; }
+  /* #map-sizer holds the full scene size (drives the scrollbars); the canvas is
+     only viewport-sized and sticks to the top-left, so we render just the visible
+     window instead of one enormous canvas (which janks with 100+ nodes). */
+  #map-sizer { position: relative; }
+  .map-wrap canvas { display: block; position: sticky; top: 0; left: 0; }
+  .map-legend {
+    position: absolute; top: 10px; right: 12px;
+    display: flex; gap: 12px;
+    font-family: var(--mono); font-size: 10px; color: var(--dim);
+    background: rgba(16,20,26,0.85);
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 5px 11px;
+    pointer-events: none;
+  }
+  .map-legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
+  @media (max-width: 700px) { .map-legend { display: none; } }
+  .mapctl {
+    position: absolute; bottom: 12px; right: 12px;
+    display: flex; flex-direction: column; gap: 4px; z-index: 3;
+  }
+  .mapctl button {
+    width: 28px; height: 28px; font-size: 15px; line-height: 1;
+    color: var(--dim); background: rgba(16,20,26,0.85);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .mapctl button:hover { color: var(--text); border-color: var(--faint); }
+  .mapctl button.mode.active { color: var(--copper); border-color: var(--copper); background: var(--copper-soft); }
+  .mapctl-sep { height: 1px; background: var(--line); margin: 2px 3px; }
+
+  /* ---- events drawer ---- */
+  .events { flex: none; border-top: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; position: relative; }
+  .events.open { height: var(--events-h, 218px); }
+  .events:not(.open) .ev-body, .events:not(.open) .ev-filters { display: none; }
+  /* drag handle on the drawer's top edge to resize it */
+  .events-grip {
+    position: absolute; top: -3px; left: 0; right: 0; height: 6px;
+    cursor: row-resize; z-index: 5;
+  }
+  .events.open .events-grip { display: block; }
+  .events:not(.open) .events-grip { display: none; }
+  .events-grip:hover, .events-grip.active { background: var(--copper-soft); }
+  .ev-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 14px; flex: none;
+    background: var(--raise);
+  }
+  .ev-title {
+    background: none; border: none; color: var(--dim);
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 8px; padding: 0;
+  }
+  .ev-title .caret { transition: transform .15s; display: inline-block; }
+  .events.open .ev-title .caret { transform: rotate(90deg); }
+  .ev-title .cnt { color: var(--faint); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .ev-filters { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .ev-search {
+    font-family: var(--mono); font-size: 11px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 4px 10px; width: 190px;
+  }
+  .ev-search::placeholder { color: var(--faint); }
+  .fchip {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--faint); padding: 3px 10px;
+  }
+  .fchip:hover { color: var(--dim); border-color: var(--faint); }
+  .fchip.on { color: var(--text); border-color: var(--copper); background: var(--copper-soft); }
+  .ev-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
+  .ev-row {
+    display: flex; gap: 10px; align-items: baseline;
+    font-family: var(--mono); font-size: 11px;
+    padding: 2px 16px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .ev-row:hover { background: var(--raise); }
+  .ev-row .ts { color: var(--faint); flex: none; }
+  .ev-row .lvl { flex: none; width: 52px; font-size: 9.5px; letter-spacing: 0.08em; }
+  .ev-row .lvl.conn { color: var(--ok); }
+  .ev-row .lvl.tunnel { color: var(--copper); }
+  .ev-row .lvl.auth { color: var(--warn); }
+  .ev-row .lvl.error { color: var(--danger); }
+  .ev-row .lvl.scan { color: var(--steel); }
+  .ev-row .tun { color: var(--steel); flex: none; width: 92px; overflow: hidden; text-overflow: ellipsis; }
+  .ev-row .msg { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+  .ev-row .msg b { color: var(--text); font-weight: 600; }
+  .ev-empty { color: var(--faint); font-family: var(--mono); font-size: 11px; padding: 14px 16px; }
+
+  /* ---- side panel ---- */
+  .panel {
+    width: var(--panel-w, 428px); flex: none;
+    position: relative;
+    border-left: 1px solid var(--line);
+    overflow-y: auto; overflow-x: hidden;
+    padding: 22px;
+    background: var(--bg);
+  }
+  /* drag handle (flex sibling) on the panel's left edge to resize it */
+  .panel-grip {
+    flex: none; width: 5px; cursor: col-resize; background: var(--line-soft);
+  }
+  .panel-grip:hover, .panel-grip.active { background: var(--copper); }
+  @media (max-width: 1140px) { .panel-grip { display: none; } }
+  .panel h1 {
+    margin: 0; font-family: var(--mono); font-size: 19px; font-weight: 700;
+    display: flex; align-items: center; gap: 9px; text-wrap: balance;
+  }
+  .type-tag {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+    padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim);
+  }
+  .type-tag.vpn { color: var(--copper); border-color: rgba(217,142,74,0.4); }
+  .type-tag.ssh { color: var(--steel); border-color: rgba(127,176,214,0.4); }
+  .panel .desc { color: var(--dim); font-size: 12.5px; margin: 4px 0 0; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em;
+    padding: 3px 10px; border-radius: 999px; margin-top: 12px;
+  }
+  .pill.on { color: var(--ok); background: var(--ok-soft); border: 1px solid rgba(76,195,138,0.35); }
+  .pill.off { color: var(--dim); background: var(--raise); border: 1px solid var(--line); }
+  .pill.waiting { color: var(--warn); background: var(--warn-soft); border: 1px solid rgba(229,184,92,0.35); }
+  .pill.failed { color: var(--danger); background: var(--danger-soft); border: 1px solid rgba(229,100,92,0.35); }
+  .panel-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .sec {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--faint); margin: 22px 0 10px;
+  }
+
+  .chart-box { border: 1px solid var(--line); border-radius: 8px; background: var(--raise); padding: 12px 12px 8px; }
+  .chart-legend { display: flex; gap: 14px; font-family: var(--mono); font-size: 10px; color: var(--dim); margin-bottom: 6px; }
+  .chart-legend .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: 3px; }
+  .chart-wrap { position: relative; }
+  .chart-tip {
+    position: absolute; pointer-events: none; display: none;
+    background: #0d1117; border: 1px solid var(--line); border-radius: 5px;
+    font-family: var(--mono); font-size: 10.5px; padding: 6px 9px; color: var(--dim);
+    white-space: nowrap; z-index: 2; font-variant-numeric: tabular-nums;
+  }
+  .chart-tip .v { color: var(--text); }
+
+  .ports { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .port-row {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px;
+    padding: 9px 12px; border-bottom: 1px solid var(--line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .port-row:last-child { border-bottom: none; }
+  .port-row .arrow { color: var(--faint); }
+  .port-row .kind { margin-left: auto; color: var(--faint); font-size: 10px; }
+  .port-row .svc { color: var(--copper); font-size: 10px; min-width: 68px; }
+  .port-row .copy {
+    font-family: var(--mono); font-size: 9.5px; color: var(--dim);
+    background: var(--raise-2); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px;
+  }
+  .port-row .copy:hover { color: var(--text); border-color: var(--faint); }
+  .port-row .go {
+    font-family: var(--mono); font-size: 11px; color: var(--copper);
+    background: var(--copper-soft); border: 1px solid rgba(217,142,74,0.4);
+    border-radius: 4px; padding: 1px 8px; margin-left: 4px; line-height: 1.2;
+  }
+  .port-row .go:hover { color: #16100a; background: var(--copper); }
+
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: 9px; letter-spacing: 0.06em; border-radius: 3px; padding: 2px 7px; }
+  .badge.totp { color: var(--warn); background: var(--warn-soft); }
+  .badge.restart { color: var(--copper); background: var(--copper-soft); }
+  .badge.socks { color: var(--steel); background: var(--steel-soft); }
+
+  .code-entry { padding: 12px; border: 1px solid var(--warn); border-radius: 7px; background: var(--warn-soft); }
+  .code-entry .hint { font-size: 11px; color: var(--warn); margin-bottom: 8px; }
+  .code-row { display: flex; gap: 6px; }
+  .code-input {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 15px; letter-spacing: 0.35em;
+    text-align: center; background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+    color: var(--text); padding: 6px 4px;
+  }
+  .code-input::placeholder { color: var(--faint); letter-spacing: 0.2em; }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+
+  .fail-box { border: 1px solid rgba(229,100,92,0.4); background: var(--danger-soft); border-radius: 8px; padding: 13px 15px; }
+  .fail-box .t { font-family: var(--mono); font-size: 11px; color: var(--danger); font-weight: 700; margin-bottom: 5px; }
+  .fail-box pre { margin: 6px 0 0; font-family: var(--mono); font-size: 10.5px; color: var(--dim); overflow-x: auto; }
+
+  #toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--raise-2); border: 1px solid var(--line); border-left: 3px solid var(--ok);
+    border-radius: 6px; padding: 10px 16px;
+    font-family: var(--mono); font-size: 12px;
+    opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s;
+    pointer-events: none; max-width: 60vw; z-index: 10;
+  }
+  #toast.show { opacity: 1; transform: none; }
+
+  /* ---- tag filter bar (over the map) ---- */
+  .tagbar {
+    position: absolute; top: 10px; left: 12px;
+    display: flex; gap: 6px; flex-wrap: wrap; max-width: 60%;
+    z-index: 2;
+  }
+  .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+    background: rgba(16,20,26,0.85); color: var(--dim);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 3px 11px;
+  }
+  .tag:hover { color: var(--text); border-color: var(--faint); }
+  .tag.on { color: var(--copper); border-color: var(--copper); background: var(--copper-soft); }
+  .tag.state.on { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+  .tag .x { margin-left: 5px; color: var(--faint); }
+  .tag-sep { display: inline-block; width: 1px; height: 16px; background: var(--line); margin: 0 4px; align-self: center; }
+
+  .edit {
+    font-family: var(--mono); font-size: 11px; color: var(--faint);
+    background: none; border: none; padding: 0 2px; vertical-align: middle;
+  }
+  .edit:hover { color: var(--copper); }
+
+  /* panel tag chips */
+  .ptags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ptag {
+    font-family: var(--mono); font-size: 10px;
+    border: 1px solid var(--line); border-radius: 999px;
+    color: var(--dim); padding: 2px 10px; background: var(--raise);
+  }
+
+  /* TOTP code-source chips */
+  .src-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .src {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--dim);
+    border: 1px solid var(--line-soft); border-radius: 6px;
+    padding: 6px 10px; background: var(--raise);
+  }
+  .src .lamp { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+  .src.armed .lamp { background: var(--ok); }
+  .src .how { margin-left: auto; color: var(--faint); font-size: 9.5px; }
+
+  /* ============ responsive ============ */
+  @media (max-width: 1140px) { .panel { display: none; } }
+  @media (max-width: 700px) {
+    .shell { flex-direction: column; }
+    .tabrail {
+      width: 100%; height: 46px; flex: none;
+      flex-direction: row; align-items: center; justify-content: flex-start;
+      padding: 0 8px; gap: 2px;
+      border-right: none; border-bottom: 1px solid var(--line);
+    }
+    .tab { flex-direction: row; gap: 6px; padding: 8px 12px; }
+    .tab.active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; border-radius: 2px 2px 0 0; }
+    .events.open { height: 190px; }
+    .ev-search { width: 120px; }
+  }
+</style>
+
+<header class="topbar">
+  <div class="brand"><span class="mark">tf</span>t-forward</div>
+  <div class="viewseg" id="viewseg" role="tablist" aria-label="View">
+    <button class="vbtn" data-view="map" role="tab">Tunnels</button>
+    <button class="vbtn" data-view="lan" role="tab">LAN</button>
+  </div>
+  <span class="chip"><span class="dot"></span>docker · orbstack</span>
+  <div class="spacer"></div>
+  <div class="throughput">
+    <span><span class="sw" style="background:var(--tx)"></span>TX <span class="v" id="agg-tx">—</span></span>
+    <span><span class="sw" style="background:var(--rx)"></span>RX <span class="v" id="agg-rx">—</span></span>
+  </div>
+  <button class="btn" id="topbtn-primary" onclick="topPrimary()">New tunnel</button>
+  <button class="btn danger-ghost" onclick="actDownAll()">Down all</button>
+</header>
+
+<div class="shell">
+  <nav class="tabrail" id="tabrail" aria-label="Tunnel types"></nav>
+
+  <div class="mid">
+    <div class="map-wrap" id="map-wrap">
+      <div class="map-scroll" id="map-scroll"><div id="map-sizer"><canvas id="map"></canvas></div></div>
+      <div class="map-legend">
+        <span><span class="sw" style="background:var(--tx)"></span>TX →</span>
+        <span><span class="sw" style="background:var(--rx)"></span>← RX</span>
+        <span><span class="sw" style="background:var(--warn)"></span>handshake</span>
+      </div>
+      <div class="tagbar" id="tagbar" aria-label="Tag filters"></div>
+    </div>
+
+    <section class="events open" id="events" aria-label="Network events">
+      <div class="events-grip" id="events-grip" title="Drag to resize"></div>
+      <div class="ev-head">
+        <button class="ev-title" onclick="toggleEvents()">
+          <span class="caret">▸</span> Network events <span class="cnt" id="ev-count"></span>
+        </button>
+        <div class="ev-filters">
+          <input class="ev-search" id="ev-search" type="search" placeholder="filter… (ip, port, text)"
+                 oninput="renderEvents()" aria-label="Filter events">
+          <button class="fchip on" data-lvl="all" onclick="setLvl(this)">ALL</button>
+          <button class="fchip" data-lvl="conn" onclick="setLvl(this)">CONN</button>
+          <button class="fchip" data-lvl="tunnel" onclick="setLvl(this)">TUNNEL</button>
+          <button class="fchip" data-lvl="auth" onclick="setLvl(this)">AUTH</button>
+          <button class="fchip" data-lvl="error" onclick="setLvl(this)">ERR</button>
+          <button class="fchip" id="ev-selonly" onclick="toggleSelOnly()">selected only</button>
+          <button class="fchip" id="ev-pause" onclick="togglePause()">pause</button>
+        </div>
+      </div>
+      <div class="ev-body" id="ev-body"></div>
+    </section>
+  </div>
+
+  <div class="panel-grip" id="panel-grip" title="Drag to resize"></div>
+  <aside class="panel" id="panel"></aside>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+/* ================================================================== theme */
+const T = {
+  bg: "#0d1117", raise: "#1a2029", raise2: "#222a35", line: "#2a3340",
+  text: "#e8ecf1", dim: "#8a94a3", faint: "#5c6675",
+  copper: "#d98e4a", steel: "#7fb0d6",
+  tx: "#c98136", rx: "#5e97d1",
+  ok: "#4cc38a", warn: "#e5b85c", danger: "#e5645c",
+};
+const MONO = 'ui-monospace, "SF Mono", Menlo, monospace';
+
+/* ================================================================== data */
+// Live state — populated from the daemon's SSE `state` snapshots. Each tunnel
+// keeps a client-side rolling history (fed by `stat` events) that the daemon
+// does not store.
+let tunnels = [];
+const TABS = [["all", "ALL"], ["vpn", "VPN"], ["ssh", "SSH"], ["local", "RLY"]];
+
+// top-level canvas: "map" (tunnels: vpn/ssh/rly) or "lan" (nmap discovery). These
+// are two fully separate canvases toggled from the topbar.
+let view = "map";
+
+// network-discovery snapshot from the daemon's SSE `scan` events (second canvas)
+let scan = { at: 0, scanning: false, interfaces: [] };
+let lanText = "", lanPort = "";   // LAN view filters (text + port)
+function scanDeviceCount() {
+  return (scan.interfaces || []).reduce((s, i) => s + ((i.devices || []).length), 0);
+}
+function deviceKey(d) { return d.mac ? d.mac.toLowerCase() : "ip:" + d.ip; }
+// distinct open ports across all devices, most-common first
+function lanPortCounts() {
+  const m = {};
+  (scan.interfaces || []).forEach((i) => (i.devices || []).forEach((d) =>
+    (d.ports || []).forEach((p) => { m[p.port] = (m[p.port] || 0) + 1; })));
+  return Object.entries(m).sort((a, b) => b[1] - a[1]);
+}
+function deviceMatches(d) {
+  if (lanPort && !(d.ports || []).some((p) => String(p.port) === lanPort)) return false;
+  if (lanText) {
+    const hay = [d.ip, d.host || "", d.mac || "", d.name || "", (d.tags || []).join(" "),
+      (d.ports || []).map((p) => p.port + " " + (p.service || "")).join(" ")].join(" ").toLowerCase();
+    if (!hay.includes(lanText)) return false;
+  }
+  return true;
+}
+// is ip:port already published by a scan-forward local tunnel?
+function isForwarded(ip, port) {
+  return tunnels.some((t) => t.state === "on" &&
+    (t.forwards || []).some((f) => f.remote === ip + ":" + port));
+}
+
+// The daemon already emits panel-ready states (on/off/waiting/failed); accept
+// them as-is. (It also maps raw docker states like "running"/"exited" for us,
+// so the panel must NOT re-map — doing so turned every "on" into "failed".)
+function mapState(s) {
+  switch (s) {
+    case "on": case "running": return "on";
+    case "waiting": return "waiting";
+    case "off": case "": return "off";
+    case "failed": case "exited": case "dead": return "failed";
+    default: return s || "off";
+  }
+}
+
+/* ============================================================ live rates */
+const HIST = 90;
+// rates are bytes/s from the daemon's `stat` events
+function initHist(t) {
+  t.rate = { tx: 0, rx: 0 };
+  t.hist = { tx: new Array(HIST).fill(0), rx: new Array(HIST).fill(0) };
+}
+// roll every tunnel's history forward once a second, using the latest rate the
+// daemon reported (rate is reset to 0 for anything not actively streaming)
+function rollHist() {
+  tunnels.forEach((t) => {
+    if (!t.hist) initHist(t);
+    if (t.state !== "on") { t.rate.tx = 0; t.rate.rx = 0; }
+    t.hist.tx.push(t.rate.tx); t.hist.tx.shift();
+    t.hist.rx.push(t.rate.rx); t.hist.rx.shift();
+  });
+  document.getElementById("agg-tx").textContent = fmtRate(tunnels.reduce((s, t) => s + (t.rate ? t.rate.tx : 0), 0));
+  document.getElementById("agg-rx").textContent = fmtRate(tunnels.reduce((s, t) => s + (t.rate ? t.rate.rx : 0), 0));
+}
+// bytes/s -> human rate
+function fmtRate(b) {
+  if (b >= 1024 * 1024) return (b / 1048576).toFixed(1) + " MB/s";
+  if (b >= 1024) return (b / 1024).toFixed(1) + " KB/s";
+  return Math.round(b) + " B/s";
+}
+
+/* ================================================================ events */
+const events = [];        /* ring buffer, newest last */
+const EV_MAX = 400;
+let evLvl = "all", evSelOnly = false, evPaused = false, evStick = true;
+
+function pushEvent(lvl, tun, msg) {
+  if (evPaused) return;
+  const d = new Date();
+  const ts = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+  events.push({ ts, lvl, tun, msg });
+  if (events.length > EV_MAX) events.shift();
+  renderEvents();
+}
+function evFiltered() {
+  const q = document.getElementById("ev-search").value.trim().toLowerCase();
+  return events.filter((e) =>
+    (evLvl === "all" || e.lvl === evLvl) &&
+    (!evSelOnly || e.tun === selected) &&
+    (!q || (e.tun + " " + e.msg.replace(/<[^>]+>/g, "")).toLowerCase().includes(q)));
+}
+function renderEvents() {
+  const body = document.getElementById("ev-body");
+  const list = evFiltered();
+  document.getElementById("ev-count").textContent = `· ${list.length}/${events.length}`;
+  if (!list.length) {
+    body.innerHTML = `<div class="ev-empty">no events match — clear the filter or wait for traffic</div>`;
+    return;
+  }
+  body.innerHTML = list.map((e) => `
+    <div class="ev-row">
+      <span class="ts">${e.ts}</span>
+      <span class="lvl ${e.lvl}">${e.lvl.toUpperCase()}</span>
+      <span class="tun">${esc(e.tun)}</span>
+      <span class="msg">${esc(e.msg)}</span>
+    </div>`).join("");
+  if (evStick) body.scrollTop = body.scrollHeight;
+}
+function setLvl(btn) {
+  evLvl = btn.dataset.lvl;
+  document.querySelectorAll(".fchip[data-lvl]").forEach((b) => b.classList.toggle("on", b === btn));
+  renderEvents();
+}
+function toggleSelOnly() {
+  evSelOnly = !evSelOnly;
+  document.getElementById("ev-selonly").classList.toggle("on", evSelOnly);
+  renderEvents();
+}
+function togglePause() {
+  evPaused = !evPaused;
+  document.getElementById("ev-pause").classList.toggle("on", evPaused);
+  document.getElementById("ev-pause").textContent = evPaused ? "resume" : "pause";
+}
+function toggleEvents() {
+  document.getElementById("events").classList.toggle("open");
+  requestAnimationFrame(layout);
+}
+document.getElementById("ev-body").addEventListener("scroll", function () {
+  evStick = this.scrollTop + this.clientHeight >= this.scrollHeight - 8;
+});
+
+/* ============================================================== tab rail */
+let tab = "all";
+let selected = "bursa";
+let activeTag = null;
+let stateFilter = "all";   // all | on | off
+function renderTabs() {
+  const el = document.getElementById("tabrail");
+  el.innerHTML = "";
+  TABS.forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.className = "tab" + (tab === key ? " active" : "");
+    const members = key === "all" ? tunnels : tunnels.filter((t) => t.type === key);
+    const up = members.filter((t) => t.state === "on").length;
+    b.innerHTML = `${label}<span class="n">${up}/${members.length}</span>`;
+    b.addEventListener("click", () => {
+      tab = key; activeTag = null;
+      renderTabs(); renderTagbar(); layout(); renderPanel();
+    });
+    el.appendChild(b);
+  });
+}
+
+/* ------------------------------------------------------------- tag bar */
+function renderTagbar() {
+  const el = document.getElementById("tagbar");
+  el.innerHTML = "";
+  // LAN view: status + rescan + text filter + port chips. Built once here (on
+  // view switch); scan updates call updateLanBar() so the text input keeps focus.
+  if (view === "lan") {
+    el.innerHTML = `
+      <span class="tag" id="lan-status" style="pointer-events:none"></span>
+      <button class="tag" id="lan-rescan">rescan</button>
+      <input class="ev-search" id="lan-text" type="search" placeholder="filter ip / host / service / name…" style="width:210px">
+      <span class="tag-sep"></span>
+      <span id="lan-ports" style="display:flex;gap:5px;flex-wrap:wrap"></span>`;
+    const ti = el.querySelector("#lan-text");
+    ti.value = lanText;
+    ti.addEventListener("input", () => { lanText = ti.value.trim().toLowerCase(); layout(); });
+    el.querySelector("#lan-rescan").addEventListener("click", () => { if (!scan.scanning) actRescan(); });
+    updateLanBar();
+    return;
+  }
+  const pool = tunnels.filter((t) => tab === "all" || t.type === tab);
+  const tags = [...new Set(pool.flatMap((t) => t.tags || []))].sort();
+  // online / offline state filter
+  [["all", "all"], ["on", "online"], ["off", "offline"]].forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.className = "tag state" + (stateFilter === key ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { stateFilter = key; renderTagbar(); layout(); });
+    el.appendChild(b);
+  });
+  if (tags.length) {
+    const sep = document.createElement("span");
+    sep.className = "tag-sep";
+    el.appendChild(sep);
+  }
+  tags.forEach((tag) => {
+    const b = document.createElement("button");
+    b.className = "tag" + (activeTag === tag ? " on" : "");
+    b.innerHTML = "#" + esc(tag) + (activeTag === tag ? '<span class="x">×</span>' : "");
+    b.addEventListener("click", () => {
+      activeTag = activeTag === tag ? null : tag;
+      renderTagbar(); layout();
+    });
+    el.appendChild(b);
+  });
+}
+
+// refresh the LAN bar's status + port chips WITHOUT rebuilding the text input
+// (so typing in the filter isn't interrupted by incoming scan updates)
+function updateLanBar() {
+  const st = document.getElementById("lan-status");
+  if (!st) return;
+  const when = scan.at ? new Date(scan.at * 1000).toLocaleTimeString() : "never";
+  const shown = scanDeviceCount();
+  st.textContent = scan.scanning ? "scanning…" : `${shown} devices · ${when}`;
+  const rb = document.getElementById("lan-rescan");
+  if (rb) { rb.textContent = scan.scanning ? "…" : "rescan"; rb.classList.toggle("on", !scan.scanning); }
+  const pc = document.getElementById("lan-ports");
+  if (pc) {
+    pc.innerHTML = lanPortCounts().slice(0, 12).map(([port, n]) =>
+      `<button class="tag${String(port) === lanPort ? " on" : ""}" data-port="${esc(String(port))}">${esc(String(port))}<span class="x">·${n}</span></button>`).join("");
+    pc.querySelectorAll("[data-port]").forEach((b) => b.addEventListener("click", () => {
+      lanPort = lanPort === b.dataset.port ? "" : b.dataset.port;
+      updateLanBar(); layout();
+    }));
+  }
+}
+
+/* ========================================================== map geometry */
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+const mapWrap = document.getElementById("map-wrap");
+const mapScroll = document.getElementById("map-scroll");
+const mapSizer = document.getElementById("map-sizer");
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+
+// Size the scroll area to the full scene, but the canvas only to the visible
+// viewport — we render just the window into the scene (culling off-screen
+// nodes), so a 100+ node scene doesn't create an enormous, janky canvas layer.
+function sizeCanvas() {
+  mapSizer.style.width = G.W + "px";
+  mapSizer.style.height = G.H + "px";
+  const vw = Math.max(1, mapScroll.clientWidth), vh = Math.max(1, mapScroll.clientHeight);
+  if (canvas.width !== Math.round(vw * DPR) || canvas.height !== Math.round(vh * DPR)) {
+    canvas.width = Math.round(vw * DPR);
+    canvas.height = Math.round(vh * DPR);
+    canvas.style.width = vw + "px";
+    canvas.style.height = vh + "px";
+  }
+}
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let G = { nodes: [], edges: [], W: 900, H: 600, z: 1 };
+
+// The map auto-arranges itself and scrolls; you just click a box to inspect it.
+// Hit test in plain canvas coordinates (no pan/zoom transform).
+function nodeAt(sx, sy) {
+  for (let i = G.nodes.length - 1; i >= 0; i--) {
+    const n = G.nodes[i];
+    if (Math.abs(sx - n.x) <= n.w / 2 && Math.abs(sy - n.y) <= n.h / 2) return n;
+  }
+  return null;
+}
+
+function visibleTunnels() {
+  return tunnels.filter((t) =>
+    (tab === "all" || t.type === tab) &&
+    (!activeTag || (t.tags || []).includes(activeTag)) &&
+    (stateFilter === "all" || (stateFilter === "on" ? t.state === "on" : t.state !== "on")));
+}
+
+function layout() {
+  if (view === "lan") { layoutScan(); drawStatic(); return; }
+  const vis = visibleTunnels();
+  const W = Math.max(760, mapWrap.clientWidth);
+  const availH = Math.max(300, mapWrap.clientHeight);
+
+  /* natural (z=1) heights — configured targets show even when the tunnel is
+     down (as dimmed placeholders). Each target box is as tall as its content
+     (name + ip + one line per forward), and the row is tall enough to stack
+     all of a tunnel's target boxes without overlap. */
+  const TGAP = 14;
+  const rowsMeta = vis.map((t) => {
+    const off = t.state === "off";
+    const targets = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))];
+    const tgtH = targets.map((host) => {
+      const nf = off ? 1 : Math.max(1, (t.forwards || []).filter((f) => f.remote.split(":")[0] === host).length);
+      const name = (t.hostNotes && t.hostNotes[host]) ? 1 : 0;
+      const rows2 = 1 + name + nf;             // ip (+name) + port lines
+      return Math.max(44, 12 + rows2 * 15 + 4);
+    });
+    const contentH = tgtH.reduce((s, h) => s + h, 0) + Math.max(0, targets.length - 1) * TGAP;
+    return { t, off, targets, tgtH, h: Math.max(74, contentH + 24) };
+  });
+  // full-size at z=1; the map-wrap scrolls if the content is taller than the view
+  const z = 1;
+  G.z = z;
+
+  let y = 40;
+  const rows = [];
+  rowsMeta.forEach((m) => {
+    const h = m.h;
+    rows.push({ ...m, y, hz: h });
+    y += h + 22;
+  });
+  const H = Math.max(availH, y + 16);
+
+  // A virtual "subnet" column sits between the container and its hosts whenever
+  // the tunnel reported a VPN subnet (netinfo). When nothing has a subnet we
+  // reclaim that space so the wires don't stretch across an empty column.
+  const anySub = vis.some((t) => t.state === "on" && t.tunSubnet &&
+    t.hostSubnets && Object.values(t.hostSubnets).some(Boolean));
+  const xYou = Math.max(130, W * 0.12);
+  const xCont = anySub ? W * 0.33 : W * 0.44;
+  const xSubnet = W * 0.575;
+  const xTarget = W - Math.max(140, W * 0.135);
+  const nodes = [], edges = [];
+
+  const youY = Math.min(H / 2, Math.max(120 * z, y / 2));
+  const you = { kind: "you", x: xYou, y: youY, w: 124 * z, h: 60 * z, label: "YOU", sub: "this machine" };
+  nodes.push(you);
+
+  // real peers that reached YOU on the selected tunnel's published ports
+  // (observed host-side: localhost forwards -> local process, 0.0.0.0 -> LAN ip+mac)
+  const selT = tunnels.find((t) => t.id === selected);
+  const clients = (selT && selT.state === "on" && Array.isArray(selT.clients)) ? selT.clients : [];
+  const shown = clients.slice(0, 7);
+  const step = 46 * z;
+  const top = youY - ((shown.length - 1) * step) / 2;
+  shown.forEach((c, i) => {
+    const label = c.ip === "127.0.0.1" ? "localhost" : c.ip;
+    const sub = c.proc ? c.proc : (c.mac || `:${c.port}`);
+    const n = { kind: "client", x: Math.max(56, xYou - 138 * z), y: top + i * step,
+      w: 104 * z, h: 38 * z, label, sub };
+    nodes.push(n);
+    edges.push({ kind: "lan", from: n, to: you, t: selT });
+  });
+
+  rows.forEach((r) => {
+    const t = r.t;
+    const cy = r.y + r.hz / 2;
+    // width fits the id and the "TYPE ↑tx ↓rx" line (which can get long)
+    const info = t.state === "on" && t.rate ? `${t.type.toUpperCase()} ↑${fmtRate(t.rate.tx)} ↓${fmtRate(t.rate.rx)}` : t.type.toUpperCase();
+    ctx.font = `600 ${Math.max(10, 12.5 * z)}px ${MONO}`;
+    let cw = ctx.measureText(t.id).width;
+    ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
+    cw = Math.max(cw, ctx.measureText(info).width);
+    const cont = { kind: "cont", t, x: xCont, y: cy, w: Math.max(150 * z, cw + 34 * z), h: 56 * z, label: t.id, sub: t.container || "tf-" + t.id };
+    nodes.push(cont);
+    // trunk always drawn; when the tunnel is off it's a dim placeholder
+    edges.push({ kind: "trunk", from: you, to: cont, t });
+    const off = r.off;
+    const tnodes = [];       // this tunnel's target nodes, wired up below
+    let ty = r.y + 12 * z;   // cumulative top of the next target box
+    r.targets.forEach((host, i) => {
+      const bh = r.tgtH[i] * z;
+      const cyt = ty + bh / 2;
+      ty += bh + TGAP * z;
+      const fwds = t.forwards.filter((f) => f.remote.split(":")[0] === host);
+      // one line per port, stacked; off tunnels show a "- - -" placeholder
+      const lines = off ? ["- - - -"] : fwds.map((f) => {
+        const lp = (f.local || "").split(":").pop();
+        const svc = f.service ? `(${f.service}) ` : "";
+        return `${svc}:${f.remote.split(":")[1]} ← ${lp}`;
+      });
+      // host NAME (from note) on top, then the IP, then the ports
+      const name = (t.hostNotes && t.hostNotes[host]) ? t.hostNotes[host] : "";
+      // width: measure the actual longest text line at the drawn font sizes
+      ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+      let maxW = Math.max(ctx.measureText(name).width, ctx.measureText(host).width);
+      ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
+      for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width);
+      const w = Math.max(150 * z, maxW + 26 * z);
+      const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
+      const tn = { kind: "target", t, x: xTarget, y: cyt, w, h: bh,
+        ip: host, name, lines, off, reach };
+      nodes.push(tn);
+      tnodes.push(tn);
+    });
+
+    // Multi-hop ssh: draw the ProxyJump chain as intermediate nodes between the
+    // container and its hosts —  cont → jump1 → … → landing(SSH_HOST) → hosts.
+    // The forwards resolve from the landing host, so the last node fans out.
+    const hasJump = t.type === "ssh" && (t.sshJump || []).length;
+    if (hasJump) {
+      const chain = [...t.sshJump, t.sshHost].filter(Boolean);
+      const n = chain.length;
+      let prev = cont;
+      chain.forEach((host, i) => {
+        const hx = xCont + (xTarget - xCont) * (i + 1) / (n + 1);
+        const role = i === n - 1 ? "landing" : "jump";
+        ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+        const w = Math.max(96 * z, ctx.measureText(host).width + 24 * z);
+        const hn = { kind: "hop", t, x: hx, y: cy, w, h: 42 * z, label: host, sub: role, role };
+        nodes.push(hn);
+        edges.push({ kind: "subtrunk", from: prev, to: hn, t });
+        prev = hn;
+      });
+      tnodes.forEach((tn) => edges.push({ kind: "leg", from: prev, to: tn, t }));
+      return; // this tunnel is fully wired through its jump chain
+    }
+
+    // Group this tunnel's hosts by the VPN subnet they live in. Hosts with a
+    // known subnet route  cont → subnet → host  (so the shared subnet reads as
+    // one hop everything talks through); hosts with no subnet keep a direct leg.
+    const bySub = {};
+    tnodes.forEach((tn) => {
+      const sub = (t.state === "on" && t.hostSubnets) ? (t.hostSubnets[tn.ip] || "") : "";
+      if (sub) (bySub[sub] || (bySub[sub] = [])).push(tn);
+      else edges.push({ kind: "leg", from: cont, to: tn, t });
+    });
+    Object.keys(bySub).forEach((cidr) => {
+      const members = bySub[cidr];
+      const cyS = members.reduce((s, n) => s + n.y, 0) / members.length;
+      const note = (t.subnetNotes && t.subnetNotes[cidr]) || "";
+      const ourIP = (t.tunSubnet === cidr && t.tunIP) ? t.tunIP : "";
+      const info = `${members.length} host${members.length > 1 ? "s" : ""}${ourIP ? " · you " + ourIP : ""}`;
+      ctx.font = `600 ${Math.max(9.5, 11.5 * z)}px ${MONO}`;
+      let sw = ctx.measureText(cidr).width;
+      ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
+      sw = Math.max(sw, ctx.measureText(info).width, note ? ctx.measureText(note).width : 0);
+      const w = Math.max(150 * z, sw + 26 * z);
+      const h = (note ? 62 : 50) * z;
+      const sn = { kind: "subnet", t, cidr, x: xSubnet, y: cyS, w, h, ip: ourIP, note, info };
+      nodes.push(sn);
+      edges.push({ kind: "subtrunk", from: cont, to: sn, t });
+      members.forEach((tn) => edges.push({ kind: "leg", from: sn, to: tn, t }));
+    });
+  });
+
+  // scroll area = full scene; canvas = viewport only (see sizeCanvas)
+  G = { nodes, edges, W, H, z };
+  sizeCanvas();
+}
+
+/* ---- second canvas: LAN discovery (YOU → interface → devices+ports) ---- */
+function layoutScan() {
+  const z = 1;
+  const W = Math.max(760, mapWrap.clientWidth);
+  const availH = Math.max(300, mapWrap.clientHeight);
+  const nodes = [], edges = [];
+  const ifaces = scan.interfaces || [];
+
+  // measure/stack device boxes per interface (name + ip + one line per port)
+  const TGAP = 14;
+  const ifMeta = ifaces.map((ifc) => {
+    const devs = (ifc.devices || []).filter(deviceMatches);
+    const devH = devs.map((d) => {
+      const rows = 1 + (d.host ? 1 : 0) + Math.max(1, (d.ports || []).length);
+      return Math.max(46, 12 + rows * 15 + 4);
+    });
+    const contentH = devH.reduce((s, h) => s + h, 0) + Math.max(0, devs.length - 1) * TGAP;
+    return { ifc, devs, devH, h: Math.max(80, contentH + 24) };
+  });
+
+  let y = 40;
+  const rows = [];
+  ifMeta.forEach((m) => { rows.push({ ...m, y }); y += m.h + 26; });
+  const H = Math.max(availH, y + 16);
+
+  const xYou = Math.max(140, W * 0.13);
+  const xIf = W * 0.42;
+  const xDev = W - Math.max(150, W * 0.16);
+
+  const you = { kind: "you", x: xYou, y: Math.min(H / 2, Math.max(120, y / 2)),
+    w: 124, h: 60, label: "YOU", sub: "this machine" };
+  nodes.push(you);
+
+  rows.forEach((r) => {
+    const cy = r.y + r.h / 2;
+    ctx.font = `600 12.5px ${MONO}`;
+    const iw = Math.max(150, ctx.measureText(r.ifc.name).width + 34,
+      ctx.measureText(r.ifc.cidr || "").width + 34);
+    const ifn = { kind: "iface", x: xIf, y: cy, w: iw, h: 56,
+      label: r.ifc.name, sub: r.ifc.cidr || "", cidr: r.ifc.cidr || "", ip: r.ifc.ip || "" };
+    nodes.push(ifn);
+    edges.push({ kind: "scanwire", from: you, to: ifn });
+
+    let ty = r.y + 12;
+    r.devs.forEach((d, i) => {
+      const bh = r.devH[i];
+      const cyt = ty + bh / 2;
+      ty += bh + TGAP;
+      const lines = (d.ports || []).map((p) => `${p.port}${p.service ? " " + p.service : ""}${isForwarded(d.ip, String(p.port)) ? "  ✓fwd" : ""}`);
+      ctx.font = `600 11px ${MONO}`;
+      const dlabel = d.name || d.host || "";
+      let mw = Math.max(ctx.measureText(d.ip).width, dlabel ? ctx.measureText(dlabel).width : 0);
+      ctx.font = `10px ${MONO}`;
+      for (const l of lines) mw = Math.max(mw, ctx.measureText(l).width);
+      const dn = { kind: "device", x: xDev, y: cyt, w: Math.max(150, mw + 26), h: bh,
+        ip: d.ip, host: d.host || "", name: d.name || d.host || "", mac: d.mac || "",
+        ports: d.ports || [], lines, iface: r.ifc.name };
+      nodes.push(dn);
+      edges.push({ kind: "scanwire", from: ifn, to: dn });
+    });
+  });
+
+  G = { nodes, edges, W, H, z: 1 };
+  sizeCanvas();
+}
+
+/* ============================================================ particles */
+const particles = [];
+function edgePath(e) {
+  const x0 = e.from.x + e.from.w / 2, y0 = e.from.y;
+  const x1 = e.to.x - e.to.w / 2, y1 = e.to.y;
+  const mx = (x0 + x1) / 2;
+  return { x0, y0, x1, y1, c1x: mx, c1y: y0, c2x: mx, c2y: y1 };
+}
+function bez(p, t) {
+  const u = 1 - t;
+  return {
+    x: u*u*u*p.x0 + 3*u*u*t*p.c1x + 3*u*t*t*p.c2x + t*t*t*p.x1,
+    y: u*u*u*p.y0 + 3*u*u*t*p.c1y + 3*u*t*t*p.c2y + t*t*t*p.y1,
+  };
+}
+// Particle flow density tracks the REAL per-tunnel throughput (bytes/s from
+// docker stats), on a LOG scale so ordinary KB/s traffic (ssh, http, db) is
+// clearly visible while a genuinely idle tunnel (keepalive only) stays still.
+const FLOW_FLOOR = 30;            // B/s: below this reads as idle
+const FLOW_FULL = 256 * 1024;    // ~256 KB/s saturates the flow
+function flowProb(rate, share) {
+  if (rate < FLOW_FLOOR) return 0;
+  const norm = Math.log2(rate / FLOW_FLOOR) / Math.log2(FLOW_FULL / FLOW_FLOOR);
+  return Math.min(0.6, Math.max(0.05, norm * 0.6)) * share;
+}
+function spawnParticles() {
+  if (reduceMotion) return;
+  G.edges.forEach((e) => {
+    if (!e.t || e.t.state !== "on" || !e.t.rate) return;
+    const share = (e.kind === "trunk" || e.kind === "subtrunk") ? 1 : 0.5;
+    // flow is driven ONLY by real bytes/s from docker stats — idle = no flow,
+    // real traffic through a forward makes it move (no synthetic baseline)
+    [["tx", e.t.rate.tx, 1], ["rx", e.t.rate.rx, -1]].forEach(([s, rate, dir]) => {
+      if (Math.random() < flowProb(rate, share) && particles.length < 340) {
+        // faster crossing (~0.7s) so the wire clears quickly once the rate
+        // drops to 0 — no lingering "flow" while TX/RX read zero
+        particles.push({ e, s, dir, t: dir === 1 ? 0 : 1, v: 0.016 + Math.random() * 0.012 });
+      }
+    });
+  });
+}
+function stepParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const pt = particles[i];
+    pt.t += pt.v * pt.dir;
+    if (pt.t < 0 || pt.t > 1) particles.splice(i, 1);
+  }
+}
+
+/* ============================================================== drawing */
+let clock = 0;
+function drawNode(n) {
+  const z = G.z;
+  const x = n.x - n.w / 2, y = n.y - n.h / 2;
+  const isSel = n.t && n.t.id === selected;
+  const st = n.t ? n.t.state : "on";
+  ctx.save();
+  if (n.kind === "you") { ctx.fillStyle = T.raise2; ctx.strokeStyle = T.copper; ctx.lineWidth = 1.5; }
+  else if (n.kind === "client") { ctx.fillStyle = T.raise; ctx.strokeStyle = T.line; ctx.lineWidth = 1; }
+  else if (n.kind === "cont") {
+    ctx.fillStyle = isSel ? T.raise2 : T.raise;
+    ctx.strokeStyle = st === "on" ? (n.t.type === "ssh" ? T.steel : n.t.type === "local" ? T.faint : T.copper)
+      : st === "waiting" ? T.warn : st === "failed" ? T.danger : T.line;
+    ctx.lineWidth = isSel ? 2 : 1.2;
+    if (st === "waiting" && !reduceMotion) ctx.globalAlpha = 0.6 + 0.4 * Math.sin(clock / 300);
+  } else if (n.kind === "target") {
+    ctx.fillStyle = T.raise;
+    // stroke encodes ping reachability: green up / red down / neutral unknown
+    ctx.strokeStyle = n.reach === true ? T.ok : n.reach === false ? T.danger : T.line;
+    ctx.lineWidth = 1;
+    if (n.off) { ctx.globalAlpha = 0.4; ctx.setLineDash([4, 4]); }
+  } else if (n.kind === "subnet") {
+    // a "virtual" network segment — steel accent + dashed outline to read as
+    // logical, not a real box
+    ctx.fillStyle = T.steel + "14";
+    ctx.strokeStyle = isSel ? T.steel : T.steel + "88";
+    ctx.lineWidth = isSel ? 2 : 1.2;
+    ctx.setLineDash([5, 3]);
+  } else if (n.kind === "hop") {
+    // an ssh ProxyJump hop; the landing host (last hop) gets a steel accent
+    ctx.fillStyle = T.raise;
+    ctx.strokeStyle = n.role === "landing" ? T.steel : isSel ? T.steel : T.line;
+    ctx.lineWidth = n.role === "landing" ? 1.3 : 1.1;
+  } else if (n.kind === "iface") {
+    ctx.fillStyle = T.raise2; ctx.strokeStyle = T.steel; ctx.lineWidth = 1.4;
+  } else if (n.kind === "device") {
+    // a discovered LAN device; copper accent when selected
+    ctx.fillStyle = T.raise;
+    ctx.strokeStyle = isSel ? T.copper : T.line;
+    ctx.lineWidth = isSel ? 1.8 : 1;
+  } else { ctx.fillStyle = T.raise; ctx.strokeStyle = T.line; ctx.lineWidth = 1; }
+  ctx.beginPath();
+  ctx.roundRect(x, y, n.w, n.h, 8 * z);
+  ctx.fill(); ctx.stroke();
+  ctx.setLineDash([]);
+  if (!(n.kind === "target" && n.off)) ctx.globalAlpha = 1;
+  // clip text to the box so nothing overflows the rounded rect
+  ctx.beginPath(); ctx.roundRect(x + 1, y + 1, n.w - 2, n.h - 2, 7 * z); ctx.clip();
+
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const f1 = Math.max(10, 12.5 * z), f2 = Math.max(8.5, 10 * z);
+  const px = x + 12 * z;
+  if (n.kind === "cont") {
+    const lamp = st === "on" ? T.ok : st === "waiting" ? T.warn : st === "failed" ? T.danger : T.faint;
+    ctx.fillStyle = lamp;
+    ctx.beginPath(); ctx.arc(x + 13 * z, n.y - 9 * z, 3.5 * z, 0, 7); ctx.fill();
+    ctx.fillStyle = T.text;
+    ctx.font = `600 ${f1}px ${MONO}`;
+    ctx.fillText(n.label, x + 24 * z, n.y - 9 * z);
+    ctx.fillStyle = T.faint;
+    ctx.font = `${f2}px ${MONO}`;
+    const info = st === "on" ? `↑${fmtRate(n.t.rate.tx)} ↓${fmtRate(n.t.rate.rx)}` : st.toUpperCase();
+    ctx.fillText(`${n.t.type.toUpperCase()} ${info}`, x + 24 * z, n.y + 11 * z);
+  } else if ((n.kind === "target" || n.kind === "device") && n.lines) {
+    if (n.kind === "target") {
+      // reachability dot (top-right): green up / red down / gray unknown
+      const dotC = n.reach === true ? T.ok : n.reach === false ? T.danger : T.faint;
+      ctx.fillStyle = dotC;
+      ctx.beginPath(); ctx.arc(x + n.w - 11 * z, y + 11 * z, 3.2 * z, 0, 7); ctx.fill();
+    }
+    ctx.textBaseline = "top";
+    let oy = 9;
+    if (n.name) {
+      ctx.fillStyle = T.text; ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+      ctx.fillText(n.name, px, y + oy * z); oy += 15;
+      ctx.fillStyle = T.dim; ctx.font = `${f2}px ${MONO}`;
+      ctx.fillText(n.ip, px, y + oy * z); oy += 14;
+    } else {
+      ctx.fillStyle = T.text; ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+      ctx.fillText(n.ip, px, y + oy * z); oy += 15;
+    }
+    ctx.fillStyle = T.faint; ctx.font = `${f2}px ${MONO}`;
+    n.lines.forEach((ln, i) => ctx.fillText(ln, px, y + (oy + i * 14) * z));
+    ctx.textBaseline = "middle";
+  } else if (n.kind === "subnet") {
+    ctx.textBaseline = "top";
+    let oy = 8;
+    // little "network" glyph dot
+    ctx.fillStyle = T.steel;
+    ctx.beginPath(); ctx.arc(x + 12 * z, y + (oy + 5) * z, 3 * z, 0, 7); ctx.fill();
+    ctx.fillStyle = T.steel; ctx.font = `600 ${Math.max(9.5, 11.5 * z)}px ${MONO}`;
+    ctx.fillText(n.cidr, x + 22 * z, y + oy * z); oy += 16;
+    if (n.note) {
+      ctx.fillStyle = T.copper; ctx.font = `${Math.max(9, 10.5 * z)}px ${MONO}`;
+      ctx.fillText(n.note, px, y + oy * z); oy += 15;
+    }
+    ctx.fillStyle = T.faint; ctx.font = `${f2}px ${MONO}`;
+    ctx.fillText(n.info, px, y + oy * z);
+    ctx.textBaseline = "middle";
+  } else {
+    ctx.fillStyle = n.kind === "you" ? T.copper : T.text;
+    ctx.font = `600 ${n.kind === "you" ? f1 : Math.max(9.5, 11 * z)}px ${MONO}`;
+    ctx.fillText(n.label, px, n.y - 8 * z);
+    ctx.fillStyle = T.faint;
+    ctx.font = `${f2}px ${MONO}`;
+    if (n.sub) ctx.fillText(n.sub, px, n.y + 10 * z);
+  }
+  ctx.restore();
+}
+function drawEdge(e) {
+  const p = edgePath(e);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(p.x0, p.y0);
+  ctx.bezierCurveTo(p.c1x, p.c1y, p.c2x, p.c2y, p.x1, p.y1);
+  if (e.kind === "scanwire") { ctx.strokeStyle = T.steel; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.2; }
+  else if (e.kind === "lan") { ctx.strokeStyle = T.line; ctx.lineWidth = 1; ctx.setLineDash([3, 5]); }
+  else if (e.t && e.t.state === "off") {
+    // dim placeholder wiring for a configured-but-down tunnel
+    ctx.strokeStyle = T.line; ctx.lineWidth = 1; ctx.setLineDash([2, 7]); ctx.globalAlpha = 0.5;
+  }
+  else if (!e.t || e.t.state === "waiting") {
+    ctx.strokeStyle = T.warn; ctx.lineWidth = 1.2; ctx.setLineDash([4, 6]);
+    if (!reduceMotion) ctx.lineDashOffset = -clock / 40;
+  } else if (e.t.state === "failed") { ctx.strokeStyle = T.danger; ctx.lineWidth = 1; ctx.setLineDash([2, 6]); }
+  else {
+    // a live wire: neutral, slightly brighter when its tunnel is selected. The
+    // flowing particles (not the wire colour) show that traffic is moving.
+    ctx.strokeStyle = e.t.id === selected ? T.dim : T.line;
+    ctx.lineWidth = (e.kind === "trunk" || e.kind === "subtrunk") ? 1.5 : 1.1;
+    if (reduceMotion) ctx.setLineDash([6, 4]);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+function drawParticles() {
+  particles.forEach((pt) => {
+    const pos = bez(edgePath(pt.e), pt.t);
+    const r = (pt.e.kind === "trunk" || pt.e.kind === "subtrunk" ? 3 : 2.3) * Math.max(0.85, G.z);
+    // soft glow so the flow reads clearly against the dark wire
+    ctx.fillStyle = pt.s === "tx" ? T.tx : T.rx;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, r, 0, 7);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+}
+function draw(ts) {
+  clock = ts || 0;
+  // render only the visible window into the scene (canvas is viewport-sized)
+  const ox = mapScroll.scrollLeft, oy = mapScroll.scrollTop;
+  const vw = mapScroll.clientWidth, vh = mapScroll.clientHeight;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, vw, vh);
+  ctx.translate(-ox, -oy);
+  const left = ox, right = ox + vw, top = oy, bot = oy + vh;
+  ctx.strokeStyle = "rgba(42,51,64,0.28)";
+  ctx.lineWidth = 1;
+  for (let gx = Math.floor(left / 90) * 90; gx < right; gx += 90) {
+    ctx.beginPath(); ctx.moveTo(gx, top); ctx.lineTo(gx, bot); ctx.stroke();
+  }
+  G.edges.forEach((e) => {
+    if (Math.max(e.from.y, e.to.y) >= top && Math.min(e.from.y, e.to.y) <= bot) drawEdge(e);
+  });
+  drawParticles();
+  G.nodes.forEach((n) => {
+    if (n.x + n.w / 2 >= left && n.x - n.w / 2 <= right && n.y + n.h / 2 >= top && n.y - n.h / 2 <= bot) drawNode(n);
+  });
+}
+function tick(ts) {
+  // The LAN canvas is static (no particle flow) and can be huge (100+ device
+  // nodes → a very tall canvas). Redrawing it every frame froze the UI; instead
+  // it's drawn once on layout/selection change (drawStatic), so the rAF loop
+  // only animates the tunnel canvas.
+  if (view === "lan") { requestAnimationFrame(tick); return; }
+  spawnParticles();
+  stepParticles();
+  draw(ts);
+  drawChart();
+  requestAnimationFrame(tick);
+}
+// one-shot draw for the static LAN canvas
+function drawStatic() { if (view === "lan") draw(clock); }
+
+/* =================================================== canvas click + hover */
+// the canvas is viewport-sized and sticky; add the scroll offset to get scene coords
+function canvasXY(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: ev.clientX - r.left + mapScroll.scrollLeft, y: ev.clientY - r.top + mapScroll.scrollTop };
+}
+// the static LAN canvas must repaint as you scroll (the tunnel canvas repaints
+// every frame anyway); rAF-throttled so fast scrolls stay smooth
+let scrollRAF = 0;
+mapScroll.addEventListener("scroll", () => {
+  if (view !== "lan" || scrollRAF) return;
+  scrollRAF = requestAnimationFrame(() => { scrollRAF = 0; draw(clock); });
+});
+// simple: click a box to inspect it; the map auto-arranges and scrolls on its own
+canvas.addEventListener("click", (ev) => {
+  const p = canvasXY(ev);
+  const n = nodeAt(p.x, p.y);
+  if (n) selectNode(n);
+});
+canvas.addEventListener("mousemove", (ev) => {
+  const p = canvasXY(ev);
+  canvas.style.cursor = nodeAt(p.x, p.y) ? "pointer" : "default";
+});
+
+/* ---- resizable right panel + events drawer (persisted) ---- */
+(function () {
+  const root = document.documentElement;
+  const pw = localStorage.getItem("tf.panelW");
+  if (pw) root.style.setProperty("--panel-w", pw + "px");
+  const eh = localStorage.getItem("tf.eventsH");
+  if (eh) root.style.setProperty("--events-h", eh + "px");
+  function grip(el, onMove) {
+    if (!el) return;
+    el.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      el.classList.add("active");
+      el.setPointerCapture(ev.pointerId);
+      const move = (e) => onMove(e);
+      const up = () => { el.classList.remove("active"); el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); };
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+    });
+  }
+  grip(document.getElementById("panel-grip"), (e) => {
+    const w = Math.max(320, Math.min(760, window.innerWidth - e.clientX));
+    root.style.setProperty("--panel-w", w + "px");
+    localStorage.setItem("tf.panelW", Math.round(w));
+    layout();
+  });
+  grip(document.getElementById("events-grip"), (e) => {
+    const rect = document.getElementById("events").getBoundingClientRect();
+    const h = Math.max(120, Math.min(window.innerHeight - 200, rect.bottom - e.clientY));
+    root.style.setProperty("--events-h", h + "px");
+    localStorage.setItem("tf.eventsH", Math.round(h));
+    layout();
+  });
+})();
+
+/* ============================================================== panel */
+// full HTML-escape (text AND attribute contexts): a discovered device's hostname
+// (nmap reverse-DNS / PTR) is attacker-influenced, so escape quotes/gt too
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+// what the right panel is showing: a tunnel, a target host, or this machine
+let sel = { kind: "tunnel" };
+function selectNode(n) {
+  if (!n) return;
+  if (n.kind === "you") sel = { kind: "you" };
+  else if (n.kind === "target" && n.t) { sel = { kind: "host", tun: n.t.id, host: n.ip }; selected = n.t.id; }
+  else if (n.kind === "subnet" && n.t) { sel = { kind: "subnet", tun: n.t.id, cidr: n.cidr }; selected = n.t.id; }
+  else if (n.kind === "hop" && n.t) { sel = { kind: "tunnel" }; selected = n.t.id; }
+  else if (n.kind === "device") { sel = { kind: "device", ip: n.ip }; }
+  else if (n.kind === "iface") { sel = { kind: "lan" }; }
+  else if (n.kind === "cont" && n.t) { sel = { kind: "tunnel" }; selected = n.t.id; }
+  else if (n.kind === "client" && n.t) { sel = { kind: "tunnel" }; selected = n.t.id; }
+  renderPanel();
+  drawStatic();   // refresh the static LAN canvas so the selection highlight updates
+  if (evSelOnly) renderEvents();
+}
+
+function renderPanel() {
+  const el = document.getElementById("panel");
+  if (sel.kind === "you") return renderYou(el);
+  if (sel.kind === "host") return renderHost(el, sel.tun, sel.host);
+  if (sel.kind === "subnet") return renderSubnet(el, sel.tun, sel.cidr);
+  if (sel.kind === "device") return renderDevice(el, sel.ip);
+  if (sel.kind === "lan") return renderLan(el);
+  return renderTunnel(el);
+}
+
+// ---- right panel: LAN discovery overview (when nothing specific is selected) ----
+function renderLan(el) {
+  const ifaces = scan.interfaces || [];
+  const when = scan.at ? new Date(scan.at * 1000).toLocaleString() : "never";
+  const stat = (k, v) => `<div class="port-row"><span>${k}</span><span class="kind">${esc(String(v))}</span></div>`;
+  el.innerHTML = `
+    <h1>LAN <span class="type-tag">DISCOVERY</span></h1>
+    <p class="desc">devices your interfaces can reach (nmap) — click one to forward a port</p>
+    <div class="panel-actions">
+      <button class="btn primary" ${scan.scanning ? "disabled" : ""} data-act="rescan">${scan.scanning ? "scanning…" : "Rescan"}</button>
+    </div>
+    <div class="sec">Summary</div>
+    <div class="ports">
+      ${stat("Interfaces", ifaces.length)}
+      ${stat("Devices", scanDeviceCount())}
+      ${stat("Last scan", when)}
+    </div>
+    <div class="sec">Interfaces — rescan one at a time</div>
+    <div class="ports">
+      ${ifaces.map((i) => `<div class="port-row">
+        <span style="color:var(--steel)">${esc(i.name)}</span>
+        <span>${esc(i.cidr || "")}</span>
+        <span class="kind">${(i.devices || []).length} devices</span>
+        <button class="copy" data-rescan="${esc(i.name)}" ${scan.scanning ? "disabled" : ""}>rescan</button>
+      </div>`).join("") || `<p class="desc">no interfaces configured — see examples/scan.example.yaml</p>`}
+    </div>`;
+  const b = el.querySelector('[data-act="rescan"]');
+  if (b) b.addEventListener("click", () => { if (!scan.scanning) actRescan(); });
+  el.querySelectorAll("[data-rescan]").forEach((btn) => btn.addEventListener("click", () => {
+    if (!scan.scanning) actRescan(btn.dataset.rescan);
+  }));
+}
+
+// ---- right panel: a discovered LAN device + per-port forward buttons ----
+function renderDevice(el, ip) {
+  let dev = null, ifname = "";
+  for (const ifc of (scan.interfaces || [])) {
+    const d = (ifc.devices || []).find((x) => x.ip === ip);
+    if (d) { dev = d; ifname = ifc.name; break; }
+  }
+  if (!dev) { el.innerHTML = `<h1>${esc(ip)}</h1><p class="desc">device no longer in the last scan</p>`; return; }
+  const ports = dev.ports || [];
+  const dtitle = dev.name || dev.host || dev.ip;
+  el.innerHTML = `
+    <h1>${esc(dtitle)} <span class="type-tag">DEVICE</span></h1>
+    <p class="desc" style="color:var(--copper)">${esc(dev.name || "(no name)")} <button class="edit" data-edit="dname" title="Name this device">✎</button></p>
+    <p class="desc">${esc(dev.ip)}${dev.host && dev.host !== dtitle ? ` · ${esc(dev.host)}` : ""} · on <b style="color:var(--text)">${esc(ifname)}</b>${dev.mac ? ` · ${esc(dev.mac)}` : ""}</p>
+    <p class="desc" style="font-size:11px;color:var(--faint)">id: ${esc(deviceKey(dev))} ${dev.mac ? "(MAC — stable across IP changes)" : "(IP-based — no MAC seen)"}</p>
+    <div class="sec">Tags <button class="edit" data-edit="dtags" title="Tag this device">✎</button></div>
+    <div class="ptags">${(dev.tags || []).map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
+    ${ports.some((p) => !isForwarded(dev.ip, String(p.port))) ? `<div class="panel-actions"><button class="btn primary" data-fwdall>→ Forward all open ports (any)</button></div>` : ""}
+    <div class="sec">Open ports — forward with <b>any</b></div>
+    <div class="ports">
+      ${ports.map((p) => {
+        const fwd = isForwarded(dev.ip, String(p.port));
+        return `<div class="port-row">
+          ${p.service ? `<span class="svc">(${esc(p.service)})</span>` : ""}
+          <span>${esc(String(p.port))}</span>
+          <span class="kind">${esc(p.service || "")}</span>
+          ${fwd ? `<span class="go" style="pointer-events:none">✓ forwarded</span>`
+                : `<button class="copy" data-fwd="${esc(String(p.port))}">→ forward</button>`}
+        </div>`;
+      }).join("") || `<p class="desc">no open ports</p>`}
+    </div>`;
+  el.querySelectorAll("[data-fwd]").forEach((b) => b.addEventListener("click", () => actForward(dev.ip, b.dataset.fwd, ifname)));
+  const fa = el.querySelector("[data-fwdall]");
+  if (fa) fa.addEventListener("click", () => actForwardAll(dev.ip, ports.map((p) => p.port), ifname));
+  el.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.edit === "dname") editDeviceName(dev);
+    else if (b.dataset.edit === "dtags") editDeviceTags(dev);
+  }));
+}
+
+function renderTunnel(el) {
+  const t = tunnels.find((x) => x.id === selected);
+  if (!t) { el.innerHTML = ""; return; }
+  const pill = { on: "● CONNECTED", off: "IDLE", waiting: "● AWAITING CODE", failed: "● FAILED" }[t.state];
+  // Action buttons carry only a static data-act; the id is bound in a closure
+  // when listeners are attached below, so no data ever lands in an inline
+  // handler (avoids attribute/JS-string breakout via crafted ids).
+  let actions = "";
+  if (t.state === "on") actions = `<button class="btn danger-ghost" data-act="down">Down</button>`;
+  else if (t.state === "off") actions = `<button class="btn primary" data-act="up">Up</button>`;
+  else if (t.state === "failed") actions = `<button class="btn primary" data-act="up">Retry</button>
+    <button class="btn danger-ghost" data-act="down">Clear</button>`;
+  else actions = `<button class="btn danger-ghost" data-act="down">Abort</button>`;
+
+  const badges = [
+    t.totp ? '<span class="badge totp">TOTP</span>' : "",
+    t.restart ? '<span class="badge restart">RESTART unless-stopped</span>' : "",
+    t.socks ? `<span class="badge socks">SOCKS ${esc((t.socks.split(":")[1]) || "")}</span>` : "",
+  ].join(" ");
+
+  let mid = "";
+  if (t.state === "waiting") mid = `
+    <div class="sec">Verification</div>
+    <div class="code-entry">
+      <div class="hint pulse">Code arrives via SMS / mail / Telegram — usually 10–30 s</div>
+      <div class="code-row">
+        <input class="code-input" inputmode="numeric" maxlength="8" placeholder="······"
+               aria-label="Verification code" data-code-input>
+        <button class="btn primary" data-act="code">Send</button>
+      </div>
+    </div>`;
+  if (t.state === "failed") mid = `
+    <div class="sec">Last state</div>
+    <div class="fail-box"><div class="t">exited — see events / logs</div>
+      <pre>run  t-forward logs ${esc(t.id)}  for the tail</pre></div>`;
+
+  const chart = t.state === "on" ? `
+    <div class="sec">Throughput — last 90 s</div>
+    <div class="chart-box">
+      <div class="chart-legend">
+        <span><span class="sw" style="background:var(--tx)"></span>TX upload</span>
+        <span><span class="sw" style="background:var(--rx)"></span>RX download</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="spark" width="300" height="110" style="width:100%; height:110px"></canvas>
+        <div class="chart-tip" id="chart-tip"></div>
+      </div>
+    </div>` : "";
+
+  // copyVals/goVals hold the strings buttons act on, referenced by numeric
+  // index so no conf-derived value is ever placed in an inline handler.
+  const copyVals = [];
+  const goVals = [];
+  const fwdEdits = [];
+  const ports = (t.forwards.length || t.socks) ? `
+    <div class="sec">Published ports</div>
+    <div class="ports">
+      ${t.forwards.map((f) => {
+        const cidx = copyVals.push(connString(f)) - 1;
+        const uri = connURI(f);
+        const gidx = uri ? goVals.push(uri) - 1 : -1;
+        const fidx = fwdEdits.push([f.remote, f.note || ""]) - 1;
+        const note = f.note ? ` · <span style="color:var(--copper)">${esc(f.note)}</span>` : "";
+        return `
+        <div class="port-row">
+          ${f.service ? `<span class="svc">(${esc(f.service)})</span>` : ""}
+          <span>${esc(f.local)}</span><span class="arrow">→</span><span>${esc(f.remote)}${note}</span>
+          <button class="copy" data-copy="${cidx}" title="${esc(connString(f))}">copy</button>
+          ${gidx >= 0 ? `<button class="go" data-go="${gidx}" title="open ${esc(uri)}">→</button>` : ""}
+          <button class="edit" data-editfwd="${fidx}" title="Edit note">✎</button>
+        </div>`;
+      }).join("")}
+      ${t.socks ? (() => {
+        const cidx = copyVals.push("socks5h://" + t.socks) - 1;
+        return `
+        <div class="port-row">
+          <span>${esc(t.socks)}</span><span class="arrow">→</span><span>far side (any host)</span>
+          <span class="kind">socks5</span>
+          <button class="copy" data-copy="${cidx}">copy</button>
+        </div>`;
+      })() : ""}
+    </div>` : "";
+
+  // who reached YOU on this tunnel's ports (host-side observation)
+  const clients = (t.state === "on" && Array.isArray(t.clients)) ? t.clients : [];
+  const clientsHtml = clients.length ? `
+    <div class="sec">Clients — reached YOU</div>
+    <div class="ports">
+      ${clients.map((c) => `
+        <div class="port-row">
+          <span>${esc(c.ip === "127.0.0.1" ? "localhost" : c.ip)}</span>
+          <span class="kind">${esc(c.proc || c.mac || "")} :${esc(String(c.port))}</span>
+        </div>`).join("")}
+    </div>` : "";
+
+  // multi-hop ssh: show the ProxyJump chain  you → hop1 → … → landing → targets.
+  // Forwards resolve from the landing host (SSH_HOST), the last node in the chain.
+  const jumpHtml = (t.type === "ssh" && (t.sshJump || []).length) ? (() => {
+    const chain = ["you", ...t.sshJump, t.sshHost].filter(Boolean);
+    const hops = chain.map((h, i) => {
+      const label = h === "you" ? "YOU" : esc(h);
+      const cls = i === 0 ? "var(--copper)" : i === chain.length - 1 ? "var(--steel)" : "var(--text)";
+      return `<span style="color:${cls}">${label}</span>`;
+    }).join(`<span style="color:var(--faint)"> → </span>`);
+    return `<div class="sec">Jump route (ssh -J)</div>
+      <div class="chart-box" style="font-family:var(--mono);font-size:11px;line-height:1.9">
+        ${hops}
+        <div class="desc" style="margin-top:6px">forwards below reach hosts as seen from <b style="color:var(--steel)">${esc(t.sshHost)}</b> (the last hop)</div>
+      </div>`;
+  })() : "";
+
+  // type only ever drives a CSS class from a fixed whitelist; anything else
+  // gets no class (never interpolated raw into the attribute).
+  const typeClass = ["vpn", "ssh", "local"].includes(t.type) ? t.type : "";
+  el.innerHTML = `
+    <h1>${esc(t.id)} <span class="type-tag ${typeClass}">${esc(String(t.type || "").toUpperCase())}</span></h1>
+    <p class="desc">${esc(t.desc || "(no name)")} <button class="edit" data-edit="name" title="Edit name">✎</button></p>
+    <span class="pill ${t.state} ${t.state === "waiting" ? "pulse" : ""}">${pill}</span>
+    <div class="panel-actions">${actions}</div>
+    ${badges.trim() ? `<div class="sec">Flags</div><div class="badges">${badges}</div>` : ""}
+    <div class="sec">Tags <button class="edit" data-edit="tags" title="Edit tags">✎</button></div>
+    <div class="ptags">${(t.tags || []).map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
+    ${t.state === "on" && t.tunIP ? `
+      <div class="sec">On the VPN</div>
+      <div class="ports">
+        <div class="port-row"><span>our IP</span><span class="kind" style="color:var(--steel)">${esc(t.tunIP)}</span></div>
+        ${t.tunSubnet ? `<div class="port-row"><span>subnet</span><span class="kind">${esc(t.tunSubnet)}</span><span class="desc" style="margin-left:6px">hosts here can talk directly</span></div>` : ""}
+      </div>` : ""}
+    ${jumpHtml}
+    ${mid}${chart}${ports}${clientsHtml}`;
+
+  // Wire handlers via addEventListener with the id/values captured in closures,
+  // so nothing conf-derived is ever parsed as HTML/JS.
+  el.querySelectorAll("[data-act]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const a = b.dataset.act;
+      if (a === "up") actUp(t.id);
+      else if (a === "down") actDown(t.id);
+      else if (a === "code") actCode(t.id);
+    });
+  });
+  el.querySelectorAll("[data-edit]").forEach((b) => {
+    b.addEventListener("click", () => {
+      if (b.dataset.edit === "name") editName(t.id);
+      else if (b.dataset.edit === "tags") editTags(t.id);
+    });
+  });
+  el.querySelectorAll("[data-editfwd]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const [remote, cur] = fwdEdits[+b.dataset.editfwd];
+      editFwdNote(t.id, remote, cur);
+    });
+  });
+  el.querySelectorAll("[data-copy]").forEach((b) => {
+    b.addEventListener("click", () => copyText(copyVals[+b.dataset.copy]));
+  });
+  el.querySelectorAll("[data-go]").forEach((b) => {
+    b.addEventListener("click", () => openURI(goVals[+b.dataset.go]));
+  });
+  const codeInput = el.querySelector("[data-code-input]");
+  if (codeInput) {
+    codeInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") actCode(t.id);
+    });
+  }
+  bindChartHover();
+}
+
+// ---- right panel: a single target HOST behind a tunnel ----
+function renderHost(el, tunId, host) {
+  const t = tunnels.find((x) => x.id === tunId);
+  if (!t) { sel = { kind: "tunnel" }; return renderTunnel(el); }
+  const fwds = (t.forwards || []).filter((f) => f.remote.split(":")[0] === host);
+  const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
+  const note = (t.hostNotes && t.hostNotes[host]) || "";
+  const reachPill = reach === true ? `<span class="pill on">● REACHABLE</span>`
+    : reach === false ? `<span class="pill failed">● UNREACHABLE</span>`
+    : `<span class="pill off">? UNKNOWN</span>`;
+  const copyVals = [], goVals = [], fwdEdits = [];
+  const portsHtml = fwds.length ? `
+    <div class="sec">Ports on this host</div>
+    <div class="ports">
+      ${fwds.map((f) => {
+        const cidx = copyVals.push(connString(f)) - 1;
+        const uri = connURI(f);
+        const gidx = uri ? goVals.push(uri) - 1 : -1;
+        const fidx = fwdEdits.push([f.remote, f.note || ""]) - 1;
+        const fnote = f.note ? ` · <span style="color:var(--copper)">${esc(f.note)}</span>` : "";
+        return `
+        <div class="port-row">
+          ${f.service ? `<span class="svc">(${esc(f.service)})</span>` : ""}
+          <span>${esc(f.local)}</span><span class="arrow">→</span><span>:${esc(f.remote.split(":")[1])}${fnote}</span>
+          <button class="copy" data-copy="${cidx}" title="${esc(connString(f))}">copy</button>
+          ${gidx >= 0 ? `<button class="go" data-go="${gidx}" title="open ${esc(uri)}">→</button>` : ""}
+          <button class="edit" data-editfwd="${fidx}" title="Edit note">✎</button>
+        </div>`;
+      }).join("")}
+    </div>` : `<p class="desc">no forwards to this host</p>`;
+  const hTags = (t.hostTags && t.hostTags[host]) || [];
+  const hostSub = (t.hostSubnets && t.hostSubnets[host]) || "";
+  const sameSubnet = hostSub && t.tunSubnet && hostSub === t.tunSubnet;
+  const subnetHtml = hostSub ? `
+    <div class="sec">Subnet</div>
+    <div class="ports">
+      <div class="port-row"><span>${esc(hostSub)}</span>
+        <span class="kind" style="color:${sameSubnet ? "var(--ok)" : "var(--faint)"}">${sameSubnet ? "same as your VPN IP — direct" : "different subnet"}</span></div>
+      ${t.tunIP ? `<div class="port-row"><span>your VPN IP</span><span class="kind" style="color:var(--steel)">${esc(t.tunIP)}</span></div>` : ""}
+    </div>` : "";
+  el.innerHTML = `
+    <h1>${esc(host)} <span class="type-tag">HOST</span></h1>
+    <p class="desc" style="color:var(--copper)">${esc(note || "(no name)")} <button class="edit" data-edit="hnote" title="Edit name/note">✎</button></p>
+    <p class="desc">behind <b style="color:var(--text)">${esc(t.id)}</b> · ${esc(t.type)}${t.state === "on" ? "" : " (tunnel down)"}</p>
+    ${reachPill}
+    <div class="sec">Tags <button class="edit" data-edit="htags" title="Edit host tags">✎</button></div>
+    <div class="ptags">${hTags.map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
+    <div class="sec">Reachability (ping via tunnel)</div>
+    <p class="desc">${reach === null ? "checked once the tunnel is up" : reach ? "responds through the tunnel" : "no ping reply through the tunnel"}</p>
+    ${subnetHtml}
+    ${portsHtml}`;
+  el.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(copyVals[+b.dataset.copy])));
+  el.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => openURI(goVals[+b.dataset.go])));
+  el.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.edit === "hnote") editHostNote(t.id, host);
+    else if (b.dataset.edit === "htags") editHostTags(t.id, host);
+  }));
+  el.querySelectorAll("[data-editfwd]").forEach((b) => b.addEventListener("click", () => {
+    const [remote, cur] = fwdEdits[+b.dataset.editfwd];
+    editFwdNote(t.id, remote, cur);
+  }));
+}
+
+// ---- right panel: a virtual VPN subnet (a segment hosts share) ----
+function renderSubnet(el, tunId, cidr) {
+  const t = tunnels.find((x) => x.id === tunId);
+  if (!t) { sel = { kind: "tunnel" }; return renderTunnel(el); }
+  const note = (t.subnetNotes && t.subnetNotes[cidr]) || "";
+  const tags = (t.subnetTags && t.subnetTags[cidr]) || [];
+  const ourHere = t.tunSubnet === cidr && t.tunIP;
+  // member hosts: those the tunnel currently places in this subnet
+  const members = Object.keys(t.hostSubnets || {}).filter((ip) => t.hostSubnets[ip] === cidr);
+  const memberHtml = members.length ? `
+    <div class="sec">Hosts on this segment</div>
+    <div class="ports">
+      ${members.map((ip) => {
+        const nm = (t.hostNotes && t.hostNotes[ip]) || "";
+        const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, ip)) ? t.hostUp[ip] : null;
+        const dot = reach === true ? "var(--ok)" : reach === false ? "var(--danger)" : "var(--faint)";
+        return `<div class="port-row" data-host="${esc(ip)}" style="cursor:pointer">
+          <span style="color:${dot}">●</span>
+          <span>${esc(ip)}</span>
+          ${nm ? `<span style="color:var(--copper)">${esc(nm)}</span>` : ""}
+          <span class="kind">inspect →</span>
+        </div>`;
+      }).join("")}
+    </div>` : `<p class="desc">no hosts detected in this subnet yet</p>`;
+  el.innerHTML = `
+    <h1>${esc(cidr)} <span class="type-tag ssh">SUBNET</span></h1>
+    <p class="desc" style="color:var(--copper)">${esc(note || "(no label)")} <button class="edit" data-edit="snote" title="Edit label">✎</button></p>
+    <p class="desc">a virtual segment behind <b style="color:var(--text)">${esc(t.id)}</b> — everything here reaches everything here directly (no forward needed)</p>
+    <div class="sec">Tags <button class="edit" data-edit="stags" title="Edit subnet tags">✎</button></div>
+    <div class="ptags">${tags.map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
+    <div class="sec">On the VPN</div>
+    <div class="ports">
+      ${ourHere ? `<div class="port-row"><span>your VPN IP</span><span class="kind" style="color:var(--steel)">${esc(t.tunIP)}</span><span class="desc" style="margin-left:6px">you're on this segment</span></div>` : `<div class="port-row"><span>your VPN IP</span><span class="kind">${esc(t.tunIP || "—")}</span><span class="desc" style="margin-left:6px">different segment</span></div>`}
+      <div class="port-row"><span>members</span><span class="kind">${members.length}</span></div>
+    </div>
+    ${memberHtml}`;
+  el.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.edit === "snote") editSubnetNote(t.id, cidr);
+    else if (b.dataset.edit === "stags") editSubnetTags(t.id, cidr);
+  }));
+  el.querySelectorAll("[data-host]").forEach((r) => r.addEventListener("click", () => {
+    sel = { kind: "host", tun: t.id, host: r.dataset.host }; renderPanel();
+  }));
+}
+
+// ---- right panel: this machine (aggregate) ----
+function renderYou(el) {
+  const on = tunnels.filter((t) => t.state === "on");
+  const tx = tunnels.reduce((s, t) => s + ((t.rate && t.rate.tx) || 0), 0);
+  const rx = tunnels.reduce((s, t) => s + ((t.rate && t.rate.rx) || 0), 0);
+  const fwdCount = on.reduce((s, t) => s + ((t.forwards || []).length), 0);
+  const cliCount = on.reduce((s, t) => s + ((t.clients || []).length), 0);
+  const stat = (k, v) => `<div class="port-row"><span>${k}</span><span class="kind">${esc(String(v))}</span></div>`;
+  const rows = on.map((t) => `
+    <div class="port-row">
+      <span style="color:var(--ok)">●</span><span>${esc(t.id)}</span>
+      <span class="kind">↑${fmtRate((t.rate && t.rate.tx) || 0)} ↓${fmtRate((t.rate && t.rate.rx) || 0)} · ${(t.forwards || []).length} fwd</span>
+    </div>`).join("") || `<p class="desc">no active tunnels</p>`;
+  el.innerHTML = `
+    <h1>YOU <span class="type-tag">THIS MACHINE</span></h1>
+    <p class="desc">every forward lands on 127.0.0.1 here</p>
+    <div class="sec">Totals</div>
+    <div class="ports">
+      ${stat("Active tunnels", on.length)}
+      ${stat("Published forwards", fwdCount)}
+      ${stat("Live clients", cliCount)}
+      ${stat("TX / RX", fmtRate(tx) + " / " + fmtRate(rx))}
+    </div>
+    <div class="sec">Active tunnels</div>
+    <div class="ports">${rows}</div>`;
+}
+
+/* -------------------- side chart (rolling area, 2 series, tooltip) */
+let chartHover = null;
+function bindChartHover() {
+  const c = document.getElementById("spark");
+  if (!c) { chartHover = null; return; }
+  c.addEventListener("mousemove", (ev) => {
+    const r = c.getBoundingClientRect();
+    chartHover = { x: ev.clientX - r.left, w: r.width };
+  });
+  c.addEventListener("mouseleave", () => {
+    chartHover = null;
+    const tip = document.getElementById("chart-tip");
+    if (tip) tip.style.display = "none";
+  });
+}
+function drawChart() {
+  const c = document.getElementById("spark");
+  if (!c) return;
+  const t = tunnels.find((x) => x.id === selected);
+  if (!t || t.state !== "on") return;
+  const wCss = c.clientWidth || 300, hCss = 110;
+  if (c.width !== wCss * DPR) { c.width = wCss * DPR; c.height = hCss * DPR; }
+  const g = c.getContext("2d");
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, wCss, hCss);
+
+  const PAD_L = 6, PAD_R = 48, PAD_T = 8, PAD_B = 6;
+  const W = wCss - PAD_L - PAD_R, H = hCss - PAD_T - PAD_B;
+  const max = Math.max(20, ...t.hist.tx, ...t.hist.rx) * 1.15;
+
+  g.strokeStyle = "rgba(42,51,64,0.5)";
+  g.lineWidth = 1;
+  for (let i = 1; i <= 3; i++) {
+    const gy = PAD_T + (H * i) / 3;
+    g.beginPath(); g.moveTo(PAD_L, gy); g.lineTo(PAD_L + W, gy); g.stroke();
+  }
+
+  [["rx", T.rx], ["tx", T.tx]].forEach(([s, color]) => {
+    const data = t.hist[s];
+    const px = (i) => PAD_L + (W * i) / (HIST - 1);
+    const py = (v) => PAD_T + H - (H * v) / max;
+    g.beginPath();
+    g.moveTo(px(0), py(data[0]));
+    data.forEach((v, i) => g.lineTo(px(i), py(v)));
+    g.lineTo(px(HIST - 1), PAD_T + H); g.lineTo(px(0), PAD_T + H);
+    g.closePath();
+    g.fillStyle = color + "22"; g.fill();
+    g.beginPath();
+    data.forEach((v, i) => i ? g.lineTo(px(i), py(v)) : g.moveTo(px(i), py(v)));
+    g.strokeStyle = color; g.lineWidth = 2; g.lineJoin = "round"; g.stroke();
+    const lastV = data[HIST - 1];
+    g.beginPath(); g.arc(px(HIST - 1), py(lastV), 3, 0, 7);
+    g.fillStyle = color; g.fill();
+    g.strokeStyle = T.raise; g.lineWidth = 2; g.stroke();
+    g.font = `10px ${MONO}`; g.fillStyle = T.dim;
+    g.textAlign = "left"; g.textBaseline = "middle";
+    g.fillText(fmtRate(lastV), px(HIST - 1) + 8, py(lastV));
+  });
+
+  const tip = document.getElementById("chart-tip");
+  if (chartHover && tip) {
+    const i = Math.max(0, Math.min(HIST - 1, Math.round(((chartHover.x - PAD_L) / W) * (HIST - 1))));
+    const hx = PAD_L + (W * i) / (HIST - 1);
+    g.strokeStyle = T.faint; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(hx, PAD_T); g.lineTo(hx, PAD_T + H); g.stroke();
+    g.setLineDash([]);
+    tip.style.display = "block";
+    tip.style.left = Math.min(hx + 10, wCss - 140) + "px";
+    tip.style.top = "6px";
+    tip.innerHTML = `t−${HIST - 1 - i}s · TX <span class="v">${fmtRate(t.hist.tx[i])}</span> · RX <span class="v">${fmtRate(t.hist.rx[i])}</span>`;
+  }
+}
+
+/* ============================================================== misc */
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function copyText(s) {
+  if (navigator.clipboard) navigator.clipboard.writeText(s).then(() => toast("copied " + s), () => toast(s));
+  else toast(s);
+}
+
+// Everything is forwarded to localhost, so connection strings target 127.0.0.1
+// on the forward's (real, resolved) local port.
+function localPort(f) { return (f.local || "").split(":").pop(); }
+
+// service-aware connection string the copy button puts on the clipboard
+function connString(f) {
+  const L = localPort(f), H = "127.0.0.1", u = f.user || "user";
+  switch (f.service) {
+    case "ssh":       return `ssh -p ${L} ${u}@${H}`;
+    case "sftp":      return `sftp -P ${L} ${u}@${H}`;
+    case "telnet":    return `telnet ${H} ${L}`;
+    case "http": case "http-alt": case "http-dev":
+    case "kibana": case "elastic": case "rabbitmq":
+                      return `http://${H}:${L}`;
+    case "https":     return `https://${H}:${L}`;
+    case "postgres":  return `psql -h ${H} -p ${L} -U ${u}`;
+    case "mysql":     return `mysql -h ${H} -P ${L} -u ${u} -p`;
+    case "mssql":     return `sqlcmd -S ${H},${L} -U ${u}`;
+    case "oracle":    return `sqlplus ${u}@${H}:${L}`;
+    case "mongodb":   return `mongosh "mongodb://${H}:${L}"`;
+    case "redis":     return `redis-cli -h ${H} -p ${L}`;
+    case "memcached": return `telnet ${H} ${L}`;
+    case "vnc":       return `vnc://${H}:${L}`;
+    case "rdp":       return `${H}:${L}`;
+    case "smb":       return `smb://${H}:${L}`;
+    case "ftp":       return `ftp://${H}:${L}`;
+    case "ldap":      return `ldap://${H}:${L}`;
+    case "amqp":      return `amqp://${H}:${L}`;
+    default:          return `${H}:${L}`;
+  }
+}
+
+// a launchable URI for the "→" button, or null for CLI-only services
+function connURI(f) {
+  const L = localPort(f), H = "127.0.0.1";
+  switch (f.service) {
+    case "http": case "http-alt": case "http-dev":
+    case "kibana": case "elastic": case "rabbitmq":
+                    return `http://${H}:${L}`;
+    case "https":   return `https://${H}:${L}`;
+    case "vnc":     return `vnc://${H}:${L}`;
+    case "rdp":     return `rdp://${H}:${L}`;
+    case "smb":     return `smb://${H}:${L}`;
+    case "ftp":     return `ftp://${H}:${L}`;
+    default:        return null;
+  }
+}
+
+function openURI(uri) {
+  if (!uri) return;
+  // http(s) opens a tab; custom schemes hand off to the OS protocol handler
+  if (uri.startsWith("http://") || uri.startsWith("https://")) window.open(uri, "_blank", "noopener");
+  else window.location.href = uri;
+  toast("opening " + uri);
+}
+
+/* ======================================================= live wiring (SSE) */
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+// Scrub the token from the address bar and history immediately after reading it,
+// so it cannot leak via bookmarks, the back/forward cache, or a Referer header.
+// The value survives only in this in-memory constant; SSE still needs it as a
+// query param (EventSource cannot set headers), but the persisted URL is clean.
+try {
+  if (TOKEN && location.search) {
+    const u = new URL(location.href);
+    u.searchParams.delete("token");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+} catch (e) { /* replaceState unavailable (e.g. file://); ignore */ }
+const withTok = (p) => p + (p.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
+
+// POST an action to the daemon; body is JSON. Shows a toast with the outcome.
+async function action(path, body, okMsg) {
+  try {
+    const r = await fetch(withTok(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok !== false) { if (okMsg !== null) toast(okMsg || "ok"); return true; }
+    toast("failed: " + (j.error || r.status));
+    return false;
+  } catch (e) {
+    toast("request failed: " + e.message);
+    return false;
+  }
+}
+function actUp(id)   { action("/up",   { name: id }, `bringing up ${id}…`); }
+function actDown(id) { action("/down", { name: id }, `disconnecting ${id}…`); }
+function actDownAll(){ action("/down", { name: "all" }, "disconnecting all…"); }
+function actCode(id) {
+  const el = document.querySelector(".code-input");
+  const code = el ? el.value.trim() : "";
+  if (!code) { toast("enter the code first"); return; }
+  action("/code", { name: id, code }, `code sent to ${id}…`);
+}
+// ---- top-level view switch (two separate canvases) ----
+function setView(v) {
+  view = v;
+  document.querySelectorAll(".vbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
+  // the tunnel-type rail belongs to the tunnel canvas only; the event console is
+  // shared (it also carries LAN scan events)
+  document.getElementById("tabrail").style.display = v === "lan" ? "none" : "";
+  document.getElementById("topbtn-primary").textContent = v === "lan" ? "Rescan" : "New tunnel";
+  if (v === "lan") {
+    if (sel.kind !== "device") sel = { kind: "lan" };
+  } else if (sel.kind === "device" || sel.kind === "lan") {
+    sel = { kind: "tunnel" };
+  }
+  renderTagbar(); layout(); renderPanel();
+}
+function topPrimary() {
+  if (view === "lan") actRescan();
+  else toast("New tunnel: drop a YAML into conf.d/");
+}
+
+// ---- LAN discovery actions ----
+function actRescan(iface) {
+  scan.scanning = true; updateLanBar();
+  action("/scan/rescan", iface ? { iface } : {}, iface ? `rescanning ${iface}…` : "scanning the network…");
+}
+function editDeviceName(dev) {
+  const v = prompt("Name for " + (dev.mac || dev.ip), dev.name || "");
+  if (v === null) return;
+  action("/scan/device", { id: deviceKey(dev), name: v.trim() }, "device name saved");
+}
+function editDeviceTags(dev) {
+  const v = prompt("Tags for " + (dev.mac || dev.ip) + " (space-separated)", (dev.tags || []).join(" "));
+  if (v === null) return;
+  action("/scan/device", { id: deviceKey(dev), tags: v.split(/\s+/).filter(Boolean) }, "device tags saved");
+}
+function actForward(ip, port, iface) {
+  action("/scan/forward", { ip, port: String(port), iface: iface || "" }, `forwarding ${ip}:${port} (any)…`);
+}
+// forward every not-yet-forwarded open port on a device (each becomes its own
+// local relay); staggered so we don't fire a burst of identical requests
+async function actForwardAll(ip, ports, iface) {
+  const todo = ports.filter((p) => !isForwarded(ip, String(p)));
+  if (!todo.length) { toast("all ports already forwarded"); return; }
+  toast(`forwarding ${todo.length} ports on ${ip}…`);
+  for (const p of todo) {
+    await action("/scan/forward", { ip, port: String(p), iface: iface || "" }, null);
+  }
+  toast(`forwarded ${todo.length} ports on ${ip}`);
+}
+
+// ---- inline conf editing (non-sensitive fields only; POST /conf/<name>) ----
+async function editConf(name, body, okMsg) {
+  return action("/conf/" + encodeURIComponent(name), body, okMsg || "saved");
+}
+function editName(id) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const v = prompt("Tunnel name", t.desc || "");
+  if (v === null) return;
+  editConf(id, { name: v.trim() }, "name updated");
+}
+function editTags(id) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const v = prompt("Tags (space-separated)", (t.tags || []).join(" "));
+  if (v === null) return;
+  editConf(id, { tags: v.split(/\s+/).filter(Boolean) }, "tags updated");
+}
+function editHostNote(id, host) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const cur = (t.hostNotes && t.hostNotes[host]) || "";
+  const v = prompt("Name / note for " + host, cur);
+  if (v === null) return;
+  editConf(id, { hosts: { [host]: { note: v.trim() } } }, "host note updated");
+}
+function editHostTags(id, host) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const cur = (t.hostTags && t.hostTags[host]) || [];
+  const v = prompt("Tags for " + host + " (space-separated)", cur.join(" "));
+  if (v === null) return;
+  editConf(id, { hosts: { [host]: { tags: v.split(/\s+/).filter(Boolean) } } }, "host tags updated");
+}
+function editFwdNote(id, remote, cur) {
+  const v = prompt("Note for forward → " + remote, cur || "");
+  if (v === null) return;
+  editConf(id, { forwards: { [remote]: v.trim() } }, "forward note updated");
+}
+function editSubnetNote(id, cidr) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const cur = (t.subnetNotes && t.subnetNotes[cidr]) || "";
+  const v = prompt("Label for subnet " + cidr, cur);
+  if (v === null) return;
+  editConf(id, { subnets: { [cidr]: { note: v.trim() } } }, "subnet label updated");
+}
+function editSubnetTags(id, cidr) {
+  const t = tunnels.find((x) => x.id === id); if (!t) return;
+  const cur = (t.subnetTags && t.subnetTags[cidr]) || [];
+  const v = prompt("Tags for subnet " + cidr + " (space-separated)", cur.join(" "));
+  if (v === null) return;
+  editConf(id, { subnets: { [cidr]: { tags: v.split(/\s+/).filter(Boolean) } } }, "subnet tags updated");
+}
+
+// upsert daemon state snapshot into the local tunnels array, preserving history
+function applyState(list) {
+  const byId = {};
+  tunnels.forEach((t) => (byId[t.id] = t));
+  const next = list.map((s) => {
+    const t = byId[s.id] || {};
+    if (!t.hist) initHist(t);
+    Object.assign(t, {
+      id: s.id, type: s.type, desc: s.desc || s.id,
+      state: mapState(s.state),
+      tags: s.tags || [], forwards: s.forwards || [],
+      socks: s.socks || null, restart: !!s.restart, totp: !!s.totp,
+      proto: s.proto || "", server: s.server || "",
+      sshHost: s.sshHost || "", user: s.user || "", sshJump: s.sshJump || [],
+      hostNotes: s.hostNotes || {}, hostTags: s.hostTags || {},
+      subnetNotes: s.subnetNotes || {}, subnetTags: s.subnetTags || {},
+      container: "tf-" + s.id,
+      lan: (s.forwards || []).some((f) => (f.local || "").startsWith("0.0.0.0")),
+    });
+    // netinfo (VPN IP / subnet) is only meaningful while connected — drop it
+    // when the tunnel isn't up so the map/panel don't show a stale segment
+    if (t.state !== "on") { t.tunIP = ""; t.tunSubnet = ""; t.hostSubnets = {}; }
+    return t;
+  });
+  tunnels = next;
+  if (!tunnels.some((t) => t.id === selected) && tunnels.length) { selected = tunnels[0].id; sel = { kind: "tunnel" }; }
+  // if a selected host's forwards vanished, fall back to the tunnel view
+  if (sel.kind === "host") {
+    const t = tunnels.find((x) => x.id === sel.tun);
+    if (!t || !(t.forwards || []).some((f) => f.remote.split(":")[0] === sel.host)) sel = { kind: "tunnel" };
+  }
+  renderTabs(); renderTagbar(); layout(); renderPanel();
+}
+
+function applyStat(s) {
+  const t = tunnels.find((x) => x.id === s.id);
+  if (!t) return;
+  if (!t.hist) initHist(t);
+  t.rate = { tx: Number(s.txRate) || 0, rx: Number(s.rxRate) || 0 };
+}
+
+let es = null;
+function connectSSE() {
+  es = new EventSource(withTok("/events"));
+  es.addEventListener("state", (e) => { try { applyState(JSON.parse(e.data)); } catch {} });
+  es.addEventListener("stat",  (e) => { try { applyStat(JSON.parse(e.data)); } catch {} });
+  es.addEventListener("event", (e) => {
+    try { const d = JSON.parse(e.data); pushEvent(d.level || "log", d.tun || "", d.msg || ""); } catch {}
+  });
+  es.addEventListener("clients", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const t = tunnels.find((x) => x.id === d.tun);
+      if (t) t.clients = d.clients || [];
+    } catch {}
+  });
+  es.addEventListener("hosts", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const t = tunnels.find((x) => x.id === d.tun);
+      if (t) t.hostUp = d.up || {};
+    } catch {}
+  });
+  es.addEventListener("netinfo", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const t = tunnels.find((x) => x.id === d.tun);
+      if (t) { t.tunIP = d.ip || ""; t.tunSubnet = d.subnet || ""; t.hostSubnets = d.hostSubnets || {}; }
+    } catch {}
+  });
+  es.addEventListener("waiting", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const t = tunnels.find((x) => x.id === d.tun);
+      if (t && t.state !== "waiting") { t.state = "waiting"; renderTabs(); renderPanel(); }
+    } catch {}
+  });
+  es.addEventListener("scan", (e) => {
+    try {
+      scan = JSON.parse(e.data) || scan;
+      scan.interfaces = scan.interfaces || [];
+      if (view === "lan") { updateLanBar(); layout(); renderPanel(); }
+    } catch {}
+  });
+  es.onerror = () => { /* EventSource auto-reconnects; nothing to do */ };
+}
+
+window.addEventListener("resize", layout);
+setInterval(rollHist, 1000);
+rollHist();
+document.querySelectorAll(".vbtn").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+document.querySelector('.vbtn[data-view="map"]').classList.add("active");
+renderTabs();
+renderTagbar();
+layout();
+renderPanel();
+connectSSE();
+// pull the last discovery snapshot once (SSE only pushes on change)
+fetch(withTok("/scan"), { headers: { "X-Token": TOKEN } })
+  .then((r) => r.json())
+  .then((d) => { scan = d || scan; scan.interfaces = scan.interfaces || []; if (view === "lan") { renderTagbar(); layout(); renderPanel(); } })
+  .catch(() => {});
+requestAnimationFrame(tick);
+</script>

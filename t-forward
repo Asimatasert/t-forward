@@ -1,0 +1,852 @@
+#!/usr/bin/env bash
+#
+# t-forward - Docker-based tunnel & port-forward manager.
+#
+# Each tunnel runs in its own container on its own Docker network
+# (fully isolated: no route conflicts, no cross-tunnel reachability,
+# host DNS untouched). Tunnel types:
+#   vpn   - openconnect (fortinet / gp / anyconnect / ...)
+#   ssh   - ssh -N with -L forwards / -D SOCKS through a jump host
+#   local - plain socat port relays, no tunnel at all
+# Port forwards and an optional SOCKS5 proxy are published to the host.
+#
+# Configuration: one YAML file per tunnel in ~/.config/t-forward/conf.d/,
+# named <tunnel>.yaml — the file name is the tunnel name. Read with yq (never
+# sourced). See examples/.
+#
+# Dependencies (host): bash >= 3.2, docker.
+
+set -u
+
+VERSION="0.4.0"
+IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
+CONFIG_DIR="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}"
+CONF_D="$CONFIG_DIR/conf.d"
+# transient auth files shared with containers; must be under $HOME so Docker
+# Desktop/OrbStack can mount it
+STATE_DIR="${T_FORWARD_STATE_DIR:-$CONFIG_DIR/.auth}"
+NAME_PREFIX="tf-"
+NET_PREFIX="tf-net-"
+LABEL="t-forward"
+INTERNAL_BASE=10000   # container-internal forward ports: 10001, 10002, ...
+SOCKS_INTERNAL=1080
+CONNECT_TIMEOUT="${T_FORWARD_CONNECT_TIMEOUT:-60}"
+
+CONFIG_OPT=""         # --config FILE-or-DIR override
+
+# ---------------------------------------------------------------- utilities
+
+info() { printf '%s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+cleanup_files=()
+cleanup() {
+    local f
+    for f in ${cleanup_files[@]+"${cleanup_files[@]}"}; do
+        rm -rf "$f"
+    done
+}
+trap cleanup EXIT
+
+slugify() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+        | sed 's/^-//; s/-$//'
+}
+
+script_dir() {
+    local src
+    src=$(readlink -f "$0" 2>/dev/null) || src="$0"
+    cd "$(dirname "$src")" && pwd
+}
+
+preflight() {
+    command -v docker >/dev/null 2>&1 \
+        || die "docker not found. Install Docker Desktop or OrbStack."
+    command -v yq >/dev/null 2>&1 \
+        || die "yq not found. Install it: brew install yq  (mikefarah/yq v4)."
+    docker info >/dev/null 2>&1 \
+        || die "docker daemon is not running. Start Docker Desktop / OrbStack."
+}
+
+# config reads need yq even when the docker daemon check is skipped (list/status)
+need_yq() {
+    command -v yq >/dev/null 2>&1 \
+        || die "yq not found. Install it: brew install yq  (mikefarah/yq v4)."
+}
+
+ensure_image() {
+    docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+    info "Image $IMAGE not found; building it..."
+    cmd_build
+}
+
+# ------------------------------------------------------------ configuration
+
+enforce_perms() {
+    # config files may contain passwords: force mode 600
+    local f=$1 mode
+    # GNU/Linux stat first (-c), then BSD/macOS (-f). Order matters: on Linux
+    # `stat -f` succeeds with UNRELATED filesystem info, so trying it first would
+    # never fall through to the correct form.
+    mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)
+    if [ -n "$mode" ] && [ "$mode" != "600" ] && [ "$mode" != "400" ]; then
+        chmod 600 "$f"
+        warn "$f had mode $mode; tightened to 600 (it may contain passwords)"
+    fi
+}
+
+# fill CONF_FILES with the available .yaml files (sorted)
+CONF_FILES=()
+scan_confs() {
+    CONF_FILES=()
+    local dir=$CONF_D f
+    if [ -n "$CONFIG_OPT" ]; then
+        if [ -f "$CONFIG_OPT" ]; then
+            enforce_perms "$CONFIG_OPT"
+            CONF_FILES=("$CONFIG_OPT")
+            return 0
+        fi
+        [ -d "$CONFIG_OPT" ] || die "--config: no such file or directory: $CONFIG_OPT"
+        dir=$CONFIG_OPT
+    fi
+    [ -d "$dir" ] || return 0
+    for f in "$dir"/*.yaml; do
+        [ -f "$f" ] || continue
+        enforce_perms "$f"
+        CONF_FILES+=("$f")
+    done
+}
+
+conf_name() { basename "$1" .yaml; }
+
+# resolve "<arg>" (name, 1-based index, or unique substring) -> conf file path
+resolve_conf() {
+    local arg=$1 f matches=() names=""
+    for f in ${CONF_FILES[@]+"${CONF_FILES[@]}"}; do
+        [ "$(conf_name "$f")" = "$arg" ] && { printf '%s' "$f"; return 0; }
+    done
+    if printf '%s' "$arg" | grep -q '^[0-9][0-9]*$'; then
+        if [ "$arg" -ge 1 ] && [ "$arg" -le "${#CONF_FILES[@]}" ]; then
+            printf '%s' "${CONF_FILES[$((arg - 1))]}"
+            return 0
+        fi
+    fi
+    for f in ${CONF_FILES[@]+"${CONF_FILES[@]}"}; do
+        names="$names, $(conf_name "$f")"
+        case "$(conf_name "$f")" in
+            *"$arg"*) matches+=("$f") ;;
+        esac
+    done
+    [ "${#matches[@]}" -eq 1 ] && { printf '%s' "${matches[0]}"; return 0; }
+    if [ "${#matches[@]}" -gt 1 ]; then
+        die "'$arg' is ambiguous: $(for f in "${matches[@]}"; do printf '%s ' "$(conf_name "$f")"; done)"
+    fi
+    die "no VPN '$arg'. Known:${names#,}"
+}
+
+# yq scalar with an "" default (read individually so a multi-line value can't
+# shift a shared read stream)
+yqs() { yq -r "($2) // \"\"" "$1"; }
+
+# read a YAML conf into the CFG_* globals with yq (the file is NOT sourced)
+yaml_load() {
+    local file=$1
+    # reject invalid YAML up front with one clear message (instead of letting
+    # every field-read spray yq parse errors)
+    yq -e '.' "$file" >/dev/null 2>&1 \
+        || { warn "invalid YAML, skipping: $(conf_name "$file")"; return 1; }
+    NAME=$(yqs "$file" .name);           TYPE=$(yq -r '.type // "vpn"' "$file")
+    SERVER=$(yqs "$file" .vpn.server);   PROTOCOL=$(yqs "$file" .vpn.protocol)
+    VPN_USER=$(yqs "$file" .vpn.user);   PASSWORD=$(yqs "$file" .vpn.password)
+    SERVERCERT=$(yqs "$file" .vpn.servercert); AUTHGROUP=$(yqs "$file" .vpn.authgroup)
+    TOTP=$(yq -r '.vpn.totp // false' "$file"); TOTP_SECRET=$(yqs "$file" .vpn.totp_secret)
+    TOTP_COMMAND=$(yqs "$file" .totp_command)
+    SSH_HOST=$(yqs "$file" .ssh.host);   SSH_PORT=$(yqs "$file" .ssh.port)
+    SSH_USER=$(yqs "$file" .ssh.user);   SSH_KEY=$(yqs "$file" .ssh.key)
+    SOCKS=$(yqs "$file" .socks);         RESTART=$(yq -r '.restart // false' "$file")
+    TAGS=$(yq -r '(.tags // []) | join(" ")' "$file")
+
+    # jump hops: each is a string ("[user@]host[:port]") or a {host,user,port}
+    # object; normalise both to a token (user/port default to SSH_USER-side / 22)
+    SSH_JUMP=""
+    local n i host user port tok
+    n=$(yq '(.ssh.jump // []) | length' "$file")
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        host=$(yq -r ".ssh.jump[$i].host // .ssh.jump[$i]" "$file")
+        user=$(yq -r ".ssh.jump[$i].user // \"\"" "$file")
+        port=$(yq -r ".ssh.jump[$i].port // \"\"" "$file")
+        tok=$host
+        [ -n "$user" ] && [ "$user" != "null" ] && tok="$user@$tok"
+        [ -n "$port" ] && [ "$port" != "null" ] && [ "$port" != "22" ] && tok="$tok:$port"
+        SSH_JUMP="$SSH_JUMP $tok"
+        i=$((i + 1))
+    done
+    SSH_JUMP=${SSH_JUMP# }
+
+    # forwards -> "LSPEC:IP:RPORT" tokens (LSPEC = local port | any | BIND:PORT);
+    # a forward without a remote port is skipped, not turned into a broken token
+    FORWARDS=""
+    local ftok
+    while IFS= read -r ftok; do
+        [ -n "$ftok" ] && FORWARDS="$FORWARDS $ftok"
+    done < <(yq -r '.hosts[]? as $h | $h.forwards[]? | select(.remote != null)
+              | ((.local // "any")|tostring) + ":" + $h.ip + ":" + (.remote|tostring)' "$file")
+    FORWARDS=${FORWARDS# }
+}
+
+# load a .yaml file into the CFG_* globals
+load_conf() {
+    local file=$1
+    NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
+    AUTHGROUP="" TOTP=false TOTP_SECRET="" TOTP_COMMAND="" FORWARDS="" SOCKS="" RESTART=false
+    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT=""
+    need_yq
+    yaml_load "$file" || return 1
+    [ -n "$NAME" ] || NAME=$(conf_name "$file")
+    validate_conf "$(conf_name "$file")" || return 1
+}
+
+# validate the loaded CFG_*; warns + returns non-zero on a bad config (callers
+# skip it in list/status, or fail the up). Not fatal, so one bad conf in the
+# directory doesn't break commands that touch every conf.
+validate_conf() {
+    local n=$1
+    case "$TYPE" in
+        vpn)
+            [ -n "$SERVER" ]   || { warn "$n: SERVER is required"; return 1; }
+            [ -n "$PROTOCOL" ] || { warn "$n: PROTOCOL is required"; return 1; }
+            [ -n "$VPN_USER" ] || { warn "$n: VPN_USER is required"; return 1; }
+            case "$PROTOCOL" in
+                fortinet|gp|anyconnect|nc|pulse|f5|array) : ;;
+                *) warn "$n: unsupported PROTOCOL '$PROTOCOL'"; return 1 ;;
+            esac ;;
+        ssh)
+            [ -n "$SSH_HOST" ] || { warn "$n: SSH_HOST is required"; return 1; }
+            [ -n "$SSH_USER" ] || { warn "$n: SSH_USER is required"; return 1; }
+            [ -z "$SSH_JUMP" ] || [ -n "$SSH_KEY" ] \
+                || { warn "$n: SSH_JUMP (multi-hop) needs SSH_KEY — password auth can't chain jumps"; return 1; } ;;
+        local)
+            [ -n "$FORWARDS" ] || [ -n "$SOCKS" ] \
+                || { warn "$n: local tunnel needs FORWARDS and/or SOCKS"; return 1; } ;;
+        *)  warn "$n: unsupported TYPE '$TYPE' (vpn | ssh | local)"; return 1 ;;
+    esac
+}
+
+container_of() { printf '%s%s' "$NAME_PREFIX" "$(slugify "$1")"; }
+network_of()   { printf '%s%s' "$NET_PREFIX" "$(slugify "$1")"; }
+
+container_state() {
+    docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null
+}
+
+remove_connection() {
+    # container + its private network + any persistent auth dir (--restart mode)
+    docker rm -f "$1" >/dev/null 2>&1
+    docker network rm "${NET_PREFIX}${1#"$NAME_PREFIX"}" >/dev/null 2>&1
+    rm -rf "$STATE_DIR/auth-${1#"$NAME_PREFIX"}"
+    return 0
+}
+
+# ------------------------------------------------------------------ connect
+
+# prompt on the terminal even when stdin/stdout are redirected
+ask() {
+    local prompt=$1 secret=${2:-} reply
+    printf '%s' "$prompt" >/dev/tty
+    if [ -n "$secret" ]; then
+        read -rs reply </dev/tty
+        printf '\n' >/dev/tty
+    else
+        read -r reply </dev/tty
+    fi
+    printf '%s' "$reply"
+}
+
+# parse one FORWARDS item "LOCAL:RHOST:RPORT" (LOCAL = PORT | any | BIND:PORT)
+# -> LOCAL_BIND / LOCAL_PORT / REMOTE_HOST / REMOTE_PORT
+parse_forward() {
+    local item=$1 tmp lspec
+    item=${item%@*}   # drop optional @service label (display-only; not for socat)
+    REMOTE_PORT=${item##*:}
+    tmp=${item%:*}
+    REMOTE_HOST=${tmp##*:}
+    lspec=${tmp%:*}
+    [ "$lspec" != "$tmp" ] && [ -n "$REMOTE_HOST" ] \
+        && printf '%s' "$REMOTE_PORT" | grep -q '^[0-9][0-9]*$' \
+        || die "invalid forward '$item' (expected LOCAL:RHOST:RPORT)"
+    case "$lspec" in
+        any)  LOCAL_BIND="127.0.0.1"; LOCAL_PORT="" ;;
+        *:*)  LOCAL_BIND=${lspec%:*}; LOCAL_PORT=${lspec##*:}
+              [ "$LOCAL_PORT" = "any" ] && LOCAL_PORT="" ;;
+        *)    LOCAL_BIND="127.0.0.1"; LOCAL_PORT=$lspec ;;
+    esac
+    if [ -n "$LOCAL_PORT" ] && ! printf '%s' "$LOCAL_PORT" | grep -q '^[0-9][0-9]*$'; then
+        die "invalid forward local part in '$item' (expected PORT, any, or BIND:PORT)"
+    fi
+}
+
+published_port() {
+    # published_port <container> <internal-port> -> "ip:port" or ""
+    docker port "$1" "$2/tcp" 2>/dev/null | head -1
+}
+
+# Docker reassigns dynamically published ports on every container restart,
+# so in --restart mode "any" is resolved to a concrete free port up front.
+pick_free_port() {
+    local p tries=0
+    while [ "$tries" -lt 50 ]; do
+        p=$((20000 + RANDOM % 20000))
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+            printf '%s' "$p"
+            return 0
+        fi
+        exec 3>&- 3<&- 2>/dev/null
+        tries=$((tries + 1))
+    done
+    die "could not find a free local port"
+}
+
+print_summary() {
+    local cname=$1 socks=$2 specs=${3:-} spec mapping internal rhost rport
+    local old_ifs=$IFS
+    IFS=';'
+    for spec in $specs; do
+        [ -n "$spec" ] || continue
+        internal=${spec%%|*}
+        rhost=$(printf '%s' "$spec" | cut -d'|' -f2)
+        rport=${spec##*|}
+        mapping=$(published_port "$cname" "$internal")
+        info "  forward  ${mapping:-<not published>}  ->  $rhost:$rport"
+    done
+    IFS=$old_ifs
+    if [ "$socks" = "true" ]; then
+        mapping=$(published_port "$cname" "$SOCKS_INTERNAL")
+        info "  socks5   ${mapping:-<not published>}"
+    fi
+}
+
+# connect the currently loaded CFG (load_conf or ad-hoc vars must be set);
+# $1 = short name (conf file name)
+up_one() {
+    local name=$1
+    local cname netname
+    cname=$(container_of "$name")
+    netname=$(network_of "$name")
+
+    case "$(container_state "$cname")" in
+        running)
+            info "'$name' is already connected. Use: t-forward down $name"
+            return 0 ;;
+        "") : ;;
+        *)  remove_connection "$cname" ;;
+    esac
+
+    if [ "$TYPE" = "vpn" ] && [ "$RESTART" = "true" ] && [ "$TOTP" = "true" ] && [ -z "$TOTP_SECRET" ]; then
+        die "'$name': RESTART needs unattended auth - manual TOTP cannot re-connect by itself (set TOTP_SECRET or drop RESTART)"
+    fi
+
+    case "$TYPE" in
+        vpn)
+            [ -n "$PASSWORD" ] || PASSWORD=$(ask "Password for $VPN_USER@$SERVER: " secret)
+            [ -n "$PASSWORD" ] || die "empty password" ;;
+        ssh)
+            if [ -z "$SSH_KEY" ] && [ -z "$PASSWORD" ]; then
+                PASSWORD=$(ask "Password for $SSH_USER@$SSH_HOST: " secret)
+                [ -n "$PASSWORD" ] || die "empty password (set SSH_KEY for key-based auth)"
+            fi ;;
+    esac
+
+    # --- port publications + FORWARDS spec for the entrypoint
+    local run_args=() fwd_spec="" item internal i=0
+    for item in $FORWARDS; do
+        parse_forward "$item"
+        internal=$((INTERNAL_BASE + 1 + i))
+        [ -z "$LOCAL_PORT" ] && [ "$RESTART" = "true" ] && LOCAL_PORT=$(pick_free_port)
+        run_args+=(-p "${LOCAL_BIND}:${LOCAL_PORT}:${internal}")
+        fwd_spec="${fwd_spec}${internal}|${REMOTE_HOST}|${REMOTE_PORT};"
+        i=$((i + 1))
+    done
+
+    local socks_enabled=false
+    if [ -n "$SOCKS" ] && [ "$SOCKS" != "false" ]; then
+        socks_enabled=true
+        if [ "$SOCKS" = "any" ] || [ "$SOCKS" = "true" ]; then
+            if [ "$RESTART" = "true" ]; then
+                run_args+=(-p "127.0.0.1:$(pick_free_port):${SOCKS_INTERNAL}")
+            else
+                run_args+=(-p "127.0.0.1::${SOCKS_INTERNAL}")
+            fi
+        else
+            run_args+=(-p "127.0.0.1:${SOCKS}:${SOCKS_INTERNAL}")
+        fi
+    fi
+
+    # --- auth dir shared with the container; persists in --restart mode so
+    # the entrypoint can re-authenticate after a crash/reboot restart, and in
+    # --no-prompt mode so `t-forward code` can drop the verification code
+    local authdir="$STATE_DIR/auth-$(slugify "$name")"
+    rm -rf "$authdir"
+    mkdir -p "$authdir"
+    chmod 700 "$authdir"
+    [ "$RESTART" = "true" ] || [ -n "$NOPROMPT" ] || cleanup_files+=("$authdir")
+    if [ -n "$PASSWORD" ]; then
+        printf '%s\n' "$PASSWORD" >"$authdir/password"
+        chmod 600 "$authdir/password"
+    fi
+    if [ "$TYPE" = "vpn" ] && [ -n "$TOTP_SECRET" ]; then
+        case "$TOTP_SECRET" in
+            base32:*|0x*) printf '%s' "$TOTP_SECRET" >"$authdir/totp_secret" ;;
+            *)            printf 'base32:%s' "$TOTP_SECRET" >"$authdir/totp_secret" ;;
+        esac
+        chmod 600 "$authdir/totp_secret"
+    fi
+    if [ "$TYPE" = "ssh" ] && [ -n "$SSH_KEY" ]; then
+        local keypath=${SSH_KEY/#\~\//$HOME\/}
+        [ -f "$keypath" ] || { rm -rf "$authdir"; die "'$name': SSH_KEY not found: $keypath"; }
+        cp "$keypath" "$authdir/ssh_key"
+        chmod 600 "$authdir/ssh_key"
+    fi
+
+    # --- private network per VPN: containers can never reach each other
+    docker network inspect "$netname" >/dev/null 2>&1 \
+        || docker network create --label "$LABEL=1" "$netname" >/dev/null \
+        || die "failed to create network $netname"
+
+    local keep_auth=false
+    if [ "$RESTART" = "true" ]; then
+        keep_auth=true
+        run_args+=(--restart unless-stopped)
+    fi
+
+    local target
+    case "$TYPE" in
+        vpn)   target="$PROTOCOL $SERVER" ;;
+        ssh)   target="ssh ${SSH_USER}@${SSH_HOST}${SSH_PORT:+:$SSH_PORT}" ;;
+        local) target="local relay" ;;
+    esac
+    info "Connecting '$name' ($target)..."
+    local cid
+    if ! cid=$(docker run -d --name "$cname" --network "$netname" \
+            --cap-add=NET_ADMIN --device /dev/net/tun \
+            -v "$authdir:/auth" \
+            -l "$LABEL=1" -l "$LABEL.name=$name" -l "$LABEL.type=$TYPE" \
+            -l "$LABEL.tags=$TAGS" \
+            -e TUNNEL_TYPE="$TYPE" \
+            -e VPN_SERVER="$SERVER" -e VPN_PROTOCOL="$PROTOCOL" \
+            -e VPN_USER="$VPN_USER" -e SERVERCERT="$SERVERCERT" \
+            -e AUTHGROUP="$AUTHGROUP" -e TOTP="$TOTP" \
+            -e SSH_HOST="$SSH_HOST" -e SSH_PORT="$SSH_PORT" -e SSH_USER="$SSH_USER" \
+            -e SSH_JUMP="$SSH_JUMP" \
+            -e FORWARDS="$fwd_spec" -e SOCKS="$socks_enabled" \
+            -e CONNECT_TIMEOUT="$CONNECT_TIMEOUT" -e KEEP_AUTH="$keep_auth" \
+            ${run_args[@]+"${run_args[@]}"} \
+            "$IMAGE" 2>&1); then
+        rm -rf "$authdir"
+        remove_connection "$cname"
+        die "docker run failed for '$name': $cid"
+    fi
+
+    # --- wait for ready / TOTP prompt / failure
+    local waited=0 prompted="" code
+    while :; do
+        if [ -e "$authdir/ready" ]; then
+            info "Connected: '$name'"
+            print_summary "$cname" "$socks_enabled" "$fwd_spec"
+            if [ "$RESTART" = "true" ]; then
+                info "  restart  unless-stopped (reconnects after crash/reboot)"
+            else
+                rm -rf "$authdir"
+            fi
+            return 0
+        fi
+        if [ "$(container_state "$cname")" != "running" ]; then
+            warn "'$name' failed to connect. Last log lines:"
+            docker logs --tail 15 "$cname" 2>&1 | sed 's/^/  | /' >&2
+            remove_connection "$cname"
+            rm -rf "$authdir"
+            return 1
+        fi
+        if [ -e "$authdir/awaiting_code" ] && [ -z "$prompted" ]; then
+            prompted=1
+            if [ -n "$NOPROMPT" ]; then
+                # detached auth: leave the container waiting and hand off to
+                # `t-forward code <name> <CODE>` (used by the web daemon /
+                # any TOTP automation). Do NOT tear down; authdir persists.
+                info "'$name' is awaiting a verification code."
+                info "  supply it with:  t-forward code $name <CODE>"
+                return 3
+            fi
+            code=$(ask "Verification code for '$name' (arrives via SMS/mail/Telegram): ")
+            [ -n "$code" ] || { warn "empty code; aborting"; remove_connection "$cname"; rm -rf "$authdir"; return 1; }
+            printf '%s\n' "$code" >"$authdir/code"
+            waited=0
+        fi
+        # in --no-prompt mode we already handed off; stop looping
+        [ -n "$NOPROMPT" ] && [ -n "$prompted" ] && return 3
+        waited=$((waited + 1))
+        if [ "$waited" -gt $((CONNECT_TIMEOUT + 30)) ]; then
+            warn "'$name' timed out after $((CONNECT_TIMEOUT + 30))s. Last log lines:"
+            docker logs --tail 15 "$cname" 2>&1 | sed 's/^/  | /' >&2
+            remove_connection "$cname"
+            rm -rf "$authdir"
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+# ----------------------------------------------------------------- commands
+
+cmd_up() {
+    local names=() adhoc="" a_forwards=() f cli_restart="" cli_tags="" cli_noprompt=""
+    NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
+    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
+    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --type)       TYPE=$2; adhoc=1; shift 2 ;;
+            --server)     SERVER=$2; adhoc=1; shift 2 ;;
+            --user)       VPN_USER=$2; adhoc=1; shift 2 ;;
+            --protocol)   PROTOCOL=$2; adhoc=1; shift 2 ;;
+            --ssh-host)   SSH_HOST=$2; TYPE=ssh; adhoc=1; shift 2 ;;
+            --ssh-user)   SSH_USER=$2; shift 2 ;;
+            --ssh-port)   SSH_PORT=$2; shift 2 ;;
+            --ssh-key)    SSH_KEY=$2; shift 2 ;;
+            --ssh-jump)   SSH_JUMP=$2; shift 2 ;;
+            --password)   PASSWORD=$2; shift 2 ;;
+            --servercert) SERVERCERT=$2; shift 2 ;;
+            --authgroup)  AUTHGROUP=$2; shift 2 ;;
+            --totp)       TOTP=true; shift ;;
+            --totp-secret) TOTP_SECRET=$2; shift 2 ;;
+            --socks)      SOCKS=$2; shift 2 ;;
+            --name)       NAME=$2; shift 2 ;;
+            --forward)    a_forwards+=("$2"); adhoc=1; shift 2 ;;
+            --restart)    RESTART=true; cli_restart=1; shift ;;
+            --tags)       cli_tags=$2; shift 2 ;;
+            --no-prompt)  cli_noprompt=1; shift ;;
+            -*)           die "unknown option for 'up': $1" ;;
+            *)            names+=("$1"); shift ;;
+        esac
+    done
+
+    ensure_image
+
+    if [ -n "$adhoc" ] && [ "${#names[@]}" -eq 0 ]; then
+        for f in ${a_forwards[@]+"${a_forwards[@]}"}; do
+            FORWARDS="$FORWARDS $f"
+        done
+        [ "$TYPE" = "local" ] && [ -z "$NAME" ] && NAME="local-forward"
+        [ "$TYPE" = "ssh" ] && [ -z "$NAME" ] && NAME=$(slugify "$SSH_HOST")
+        [ -n "$NAME" ] || NAME=$(slugify "$SERVER")
+        [ -n "$NAME" ] || die "ad-hoc up needs --name or enough to derive one"
+        [ -n "$cli_tags" ] && TAGS=$cli_tags
+        [ -n "$cli_noprompt" ] && NOPROMPT=1
+        validate_conf "$NAME"
+        up_one "$NAME"
+        return $?
+    fi
+
+    [ "${#names[@]}" -gt 0 ] || die "usage: t-forward up NAME [NAME...] (see 't-forward list')"
+    local n file rc=0 awaiting=0
+    for n in "${names[@]}"; do
+        file=$(resolve_conf "$n") || { rc=1; continue; }
+        load_conf "$file" || { rc=1; continue; }
+        [ -n "$cli_restart" ] && RESTART=true
+        [ -n "$cli_tags" ] && TAGS=$cli_tags
+        [ -n "$cli_noprompt" ] && NOPROMPT=1
+        up_one "$(conf_name "$file")"
+        local up_rc=$?
+        if [ "$up_rc" -eq 3 ]; then
+            awaiting=1
+        elif [ "$up_rc" -ne 0 ]; then
+            rc=1
+        fi
+    done
+    # no hard failure but at least one container is awaiting a code: surface the
+    # detached-TOTP handoff (exit 3) so automation calls `t-forward code`.
+    [ "$rc" -eq 0 ] && [ "$awaiting" -eq 1 ] && return 3
+    return "$rc"
+}
+
+# supply a verification code to a tunnel that is awaiting one (started with
+# `up --no-prompt`). The container is already blocking on <authdir>/code;
+# this is the single primitive every TOTP automation builds on.
+cmd_code() {
+    [ $# -ge 2 ] || die "usage: t-forward code NAME CODE"
+    local n=$1 code=$2 cname authdir
+    cname=$(container_of "$n")
+    if [ -z "$(container_state "$cname")" ]; then
+        local file; file=$(resolve_conf "$n" 2>/dev/null) || file=""
+        [ -n "$file" ] && { n=$(conf_name "$file"); cname=$(container_of "$n"); }
+    fi
+    [ -n "$(container_state "$cname")" ] || die "'$1' has no running container"
+    authdir="$STATE_DIR/auth-$(slugify "$n")"
+    [ -e "$authdir/awaiting_code" ] \
+        || die "'$n' is not awaiting a verification code"
+    printf '%s' "$code" | grep -q '^[0-9A-Za-z]\{4,\}$' \
+        || die "code looks invalid (expected >=4 alphanumeric chars)"
+    printf '%s\n' "$code" >"$authdir/code"
+    info "code delivered to '$n'"
+    # brief confirmation that the tunnel came up
+    local i=0
+    while [ "$i" -lt 20 ]; do
+        [ -e "$authdir/ready" ] && { info "'$n' connected"; return 0; }
+        [ "$(container_state "$cname")" = "running" ] || { warn "'$n' exited after code; check 't-forward logs $n'"; return 1; }
+        i=$((i + 1)); sleep 1
+    done
+    info "'$n' still negotiating; check 't-forward status'"
+}
+
+# tail and level-tag container logs (conn/tunnel/auth/error), like the daemon
+cmd_events() {
+    local follow=""
+    [ "${1:-}" = "-f" ] && { follow="-f"; shift; }
+    local ids
+    if [ $# -ge 1 ]; then
+        local cname; cname=$(container_of "$1")
+        [ -n "$(container_state "$cname")" ] || { local file; file=$(resolve_conf "$1" 2>/dev/null) && cname=$(container_of "$(conf_name "$file")"); }
+        [ -n "$(container_state "$cname")" ] || die "'$1' has no container"
+        ids=$cname
+        [ -n "$follow" ] || follow=""
+    else
+        [ -z "$follow" ] || die "follow (-f) needs a single tunnel name"
+        ids=$(docker ps -q --filter "label=$LABEL" 2>/dev/null)
+    fi
+    local id
+    for id in $ids; do
+        docker logs ${follow:+-f} --tail 40 "$id" 2>&1 | tag_events "$id"
+        [ -n "$follow" ] && return 0
+    done
+}
+
+# classify [t-forward]/socat/openconnect log lines into event levels
+tag_events() {
+    local src=$1
+    sed -u 's/\r$//' 2>/dev/null <&0 | while IFS= read -r line; do
+        local lvl=log
+        case "$line" in
+            *"/dev/vhost-net"*|*"route/flush"*|*"Read-only file system"*|*"Cannot open"*) lvl=log ;;
+            *"accepting connection"*|*"N accept"*|*" connection from"*|*"connect to"*) lvl=conn ;;
+            *"tunnel is up"*|*"READY"*|*"reconnect"*|*"established"*|*"exited"*) lvl=tunnel ;;
+            *"password sent"*|*"verification code"*|*"awaiting"*|*"waiting for"*) lvl=auth ;;
+            *ERROR*|*Error*|*failed*|*Failed*) lvl=error ;;
+        esac
+        printf '%-6s %s\n' "$lvl" "$line"
+    done
+}
+
+cmd_down() {
+    [ $# -gt 0 ] || die "usage: t-forward down NAME...|all"
+    local c n cname file
+    if [ "$1" = "all" ]; then
+        local count=0
+        while IFS= read -r c; do
+            [ -n "$c" ] || continue
+            remove_connection "$(docker inspect -f '{{.Name}}' "$c" | sed 's|^/||')"
+            count=$((count + 1))
+        done <<<"$(docker ps -aq --filter "label=$LABEL" 2>/dev/null)"
+        # sweep leftover private networks
+        while IFS= read -r c; do
+            [ -n "$c" ] && docker network rm "$c" >/dev/null 2>&1
+        done <<<"$(docker network ls -q --filter "label=$LABEL" --format '{{.Name}}' 2>/dev/null)"
+        info "disconnected all ($count)"
+        return 0
+    fi
+    for n in "$@"; do
+        cname=$(container_of "$n")
+        if [ -z "$(container_state "$cname")" ]; then
+            file=$(resolve_conf "$n" 2>/dev/null) || file=""
+            [ -n "$file" ] && cname=$(container_of "$(conf_name "$file")")
+        fi
+        if [ -n "$(container_state "$cname")" ]; then
+            remove_connection "$cname"
+            info "disconnected '$n'"
+        else
+            info "'$n' is not connected"
+        fi
+    done
+}
+
+cmd_status() {
+    local ids id name state started
+    ids=$(docker ps -aq --filter "label=$LABEL" 2>/dev/null)
+    if [ -z "$ids" ]; then
+        info "no active t-forward connections"
+        return 0
+    fi
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        name=$(docker inspect -f "{{index .Config.Labels \"$LABEL.name\"}}" "$id")
+        state=$(docker inspect -f '{{.State.Status}}' "$id")
+        started=$(docker inspect -f '{{.State.StartedAt}}' "$id" | cut -dT -f1,2 | tr T ' ' | cut -d. -f1)
+        local tags; tags=$(docker inspect -f "{{index .Config.Labels \"$LABEL.tags\"}}" "$id" 2>/dev/null)
+        info "$name  $state  (since $started)${tags:+  [$tags]}"
+        docker port "$id" 2>/dev/null | sed 's/^/    /'
+    done <<<"$ids"
+}
+
+cmd_list() {
+    if [ "${#CONF_FILES[@]}" -eq 0 ]; then
+        info "no VPNs configured. Drop YAML files into $CONF_D/<name>.yaml (see examples/)"
+        return 0
+    fi
+    local i=0 f name state marker nfw via
+    printf '%3s  %-16s %-30s %-6s %-12s %-5s %-8s %-6s %s\n' \
+        "#" NAME DESCRIPTION TYPE VIA TOTP FORWARDS SOCKS STATUS
+    for f in "${CONF_FILES[@]}"; do
+        i=$((i + 1))
+        name=$(conf_name "$f")
+        if ! load_conf "$f"; then
+            printf '%3s  %-16s %-30s %-6s\n' "$i" "$name" "(invalid config — see warning)" "?"
+            continue
+        fi
+        nfw=0
+        local item
+        for item in $FORWARDS; do nfw=$((nfw + 1)); done
+        case "$TYPE" in
+            vpn)   via=$PROTOCOL ;;
+            ssh)   via=$SSH_HOST ;;
+            local) via="-" ;;
+        esac
+        state=$(container_state "$(container_of "$name")")
+        marker="-"
+        [ "$state" = "running" ] && marker="ACTIVE"
+        [ -n "$state" ] && [ "$state" != "running" ] && marker="$state"
+        printf '%3s  %-16s %-30s %-6s %-12s %-5s %-8s %-6s %s\n' \
+            "$i" "$name" "$NAME" "$TYPE" "$via" "$TOTP" "$nfw" "${SOCKS:--}" "$marker"
+    done
+}
+
+cmd_logs() {
+    local follow=""
+    [ "${1:-}" = "-f" ] && { follow="-f"; shift; }
+    [ $# -ge 1 ] || die "usage: t-forward logs [-f] NAME"
+    [ "${2:-}" = "-f" ] && follow="-f"
+    local cname file
+    cname=$(container_of "$1")
+    if [ -z "$(container_state "$cname")" ]; then
+        file=$(resolve_conf "$1" 2>/dev/null) || file=""
+        [ -n "$file" ] && cname=$(container_of "$(conf_name "$file")")
+    fi
+    [ -n "$(container_state "$cname")" ] || die "'$1' has no container (never connected?)"
+    if [ -n "$follow" ]; then
+        docker logs -f "$cname"
+    else
+        docker logs "$cname"
+    fi
+}
+
+cmd_build() {
+    local dir
+    dir=$(script_dir)
+    [ -f "$dir/Dockerfile" ] \
+        || die "Dockerfile not found next to this script ($dir). Run from the t-forward repo."
+    docker build -t "$IMAGE" "$dir" || die "image build failed"
+    info "built $IMAGE"
+}
+
+cmd_menu() {
+    cmd_list
+    [ "${#CONF_FILES[@]}" -gt 0 ] || return 0
+    local choice file name cname
+    choice=$(ask "Select # to connect/disconnect (q to quit): ")
+    case "$choice" in
+        q|Q|"") return 0 ;;
+    esac
+    printf '%s' "$choice" | grep -q '^[0-9][0-9]*$' || die "invalid selection"
+    [ "$choice" -ge 1 ] && [ "$choice" -le "${#CONF_FILES[@]}" ] || die "selection out of range"
+    file=${CONF_FILES[$((choice - 1))]}
+    name=$(conf_name "$file")
+    cname=$(container_of "$name")
+    if [ "$(container_state "$cname")" = "running" ]; then
+        remove_connection "$cname"
+        info "disconnected '$name'"
+    else
+        ensure_image
+        load_conf "$file" || die "'$name' has an invalid config (see warning above)"
+        up_one "$name"
+    fi
+}
+
+usage() {
+    cat <<EOF
+t-forward $VERSION - Docker-based multi-VPN manager (openconnect)
+
+Usage:
+  t-forward                      interactive menu
+  t-forward up NAME [NAME...]    bring up one or more tunnels
+  t-forward down NAME...|all     tear down
+  t-forward code NAME CODE       supply a TOTP code to a waiting tunnel
+  t-forward status               active tunnels and published ports
+  t-forward list                 list configured tunnels
+  t-forward logs [-f] NAME       show a tunnel's container logs
+  t-forward events [-f] [NAME]   level-tagged log events
+  t-forward build                (re)build the container image
+
+Options:
+  --config FILE|DIR              use FILE or DIR/*.yaml instead of $CONF_D
+
+Up options:
+  --restart                      auto-reconnect after crash/reboot
+                                 (unattended: not allowed with manual TOTP;
+                                 keeps credentials in the auth dir)
+  --no-prompt                    don't block for a TOTP code; hand off to
+                                 't-forward code NAME CODE' (used by the daemon)
+  --tags "a b c"                 attach tags (also settable via TAGS= in conf)
+
+Ad-hoc up (no config file), by tunnel type:
+  vpn:    --server HOST --user U --protocol P [--servercert PIN]
+          [--authgroup G] [--totp] [--totp-secret S]
+  ssh:    --ssh-host HOST --ssh-user U [--ssh-port N] [--ssh-key PATH]
+  local:  --type local --name NAME
+  common: --password PW --socks PORT|any --name NAME
+          --forward LOCAL:RHOST:RPORT   (repeatable)
+
+Config: one YAML file per tunnel in $CONF_D/<name>.yaml
+  TYPE=vpn|ssh|local             (default vpn)
+  vpn:    SERVER= PROTOCOL= VPN_USER= PASSWORD= SERVERCERT= AUTHGROUP=
+          TOTP=true|false TOTP_SECRET=
+  ssh:    SSH_HOST= SSH_USER= SSH_PORT= SSH_KEY=~/.ssh/id_x  (or PASSWORD=)
+  common: SOCKS=PORT|any RESTART=true|false TAGS="a b c"
+          HOSTS=( "IP | note | RPORT:LPORT[@service] ..." )  # one host per line
+          (legacy: FORWARDS="LOCAL:RHOST:RPORT ..." still accepted)
+EOF
+}
+
+# --------------------------------------------------------------------- main
+
+main() {
+    local args=() cmd=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config)      CONFIG_OPT=$2; shift 2 ;;
+            -h|--help)     usage; exit 0 ;;
+            -V|--version)  info "t-forward $VERSION"; exit 0 ;;
+            *)             args+=("$1"); shift ;;
+        esac
+    done
+    set -- ${args[@]+"${args[@]}"}
+
+    preflight
+
+    cmd=${1:-menu}
+    [ $# -gt 0 ] && shift
+
+    case "$cmd" in
+        up)      scan_confs; cmd_up "$@" ;;
+        down)    scan_confs; cmd_down "$@" ;;
+        code)    scan_confs; cmd_code "$@" ;;
+        status)  cmd_status "$@" ;;
+        list)    scan_confs; cmd_list "$@" ;;
+        logs)    scan_confs; cmd_logs "$@" ;;
+        events)  scan_confs; cmd_events "$@" ;;
+        build)   cmd_build "$@" ;;
+        menu)    scan_confs; cmd_menu ;;
+        *)       usage; die "unknown command: $cmd" ;;
+    esac
+}
+
+main "$@"

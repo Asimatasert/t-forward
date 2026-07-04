@@ -1,0 +1,18 @@
+# build artifacts
+web/t-forward-web
+*.test
+*.o
+
+# runtime / local — NEVER commit real configs or credentials
+config.yaml
+conf.d/
+*.local.yaml
+.scan-cache.json
+scan.yaml
+devices.yaml
+*.migrated.bak
+.web-token
+
+# OS / editor
+.DS_Store
+*.swp

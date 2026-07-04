@@ -1,0 +1,15 @@
+# Local relay: no tunnel at all, just expose a reachable host:port on localhost.
+# Targets are resolved from inside Docker — use host.docker.internal for a service
+# running on this machine itself.
+name: LAN printer + NAS
+type: local
+
+hosts:
+  - ip: 192.168.1.77
+    name: Label printer
+    forwards:
+      - { remote: 9100, local: 9100, service: jetdirect }
+  - ip: 192.168.1.10
+    name: NAS
+    forwards:
+      - { remote: 443, local: 8443, service: https }
