@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os/exec"
@@ -115,11 +116,22 @@ func (a *Actions) handleUp(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.runTF(r.Context(), name, "up", name, "--no-prompt")
 	a.docker.broadcastState()
-	if err != nil {
+	if err != nil && exitCode(err) != 3 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// exit 3 = detached-TOTP handoff: the container is up and awaiting a
+	// verification code (not a failure). The panel shows a code entry.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waiting": exitCode(err) == 3})
+}
+
+// exitCode returns the process exit code from a run error, or -1 if it isn't one.
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 // handleDown: POST /down {name|"all"}

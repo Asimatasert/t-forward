@@ -1655,7 +1655,7 @@ function renderYou(el) {
     </div>`).join("") || `<p class="desc">no active tunnels</p>`;
   el.innerHTML = `
     <h1>YOU <span class="type-tag">THIS MACHINE</span></h1>
-    <p class="desc">every forward lands on 127.0.0.1 here</p>
+    <p class="desc">reach every forward at <b style="color:var(--text)">${esc(pubHost())}</b></p>
     <div class="sec">Totals</div>
     <div class="ports">
       ${stat("Active tunnels", on.length)}
@@ -1845,14 +1845,17 @@ async function action(path, body, okMsg) {
     return false;
   }
 }
-function actUp(id)   { action("/up",   { name: id }, `bringing up ${id}…`); }
-function actDown(id) { action("/down", { name: id }, `disconnecting ${id}…`); }
-function actDownAll(){ action("/down", { name: "all" }, "disconnecting all…"); }
+// re-pull state a few times after an action so transitions (idle→waiting→on)
+// show quickly even when the SSE stream is blocked (e.g. by a proxy)
+function afterAct() { [300, 1200, 3000, 6000].forEach((ms) => setTimeout(pullState, ms)); }
+function actUp(id)   { action("/up",   { name: id }, `bringing up ${id}…`).then(afterAct); }
+function actDown(id) { action("/down", { name: id }, `disconnecting ${id}…`).then(afterAct); }
+function actDownAll(){ action("/down", { name: "all" }, "disconnecting all…").then(afterAct); }
 function actCode(id) {
   const el = document.querySelector(".code-input");
   const code = el ? el.value.trim() : "";
   if (!code) { toast("enter the code first"); return; }
-  action("/code", { name: id, code }, `code sent to ${id}…`);
+  action("/code", { name: id, code }, `code sent to ${id}…`).then(afterAct);
 }
 // ---- top-level view switch (two separate canvases) ----
 function setView(v) {
