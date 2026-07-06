@@ -31,6 +31,7 @@ set -u
 
 AUTH=/auth
 PIPE=/run/authpipe
+OC_LOG=/run/openconnect.log
 TYPE="${TUNNEL_TYPE:-vpn}"
 TUN_TIMEOUT="${CONNECT_TIMEOUT:-60}"
 # How long a manual-TOTP container waits for the host to deliver the code. This
@@ -45,6 +46,19 @@ log() { echo "[t-forward] $*"; }
 fail() {
     log "ERROR: $*"
     exit 1
+}
+
+# Detect a credentials rejection in openconnect's mirrored output. Without
+# this, a rejected password is indistinguishable from "still authenticating":
+# openconnect silently re-prompts on stdin and blocks forever.
+#   - explicit failure strings (gp answers 512 to a bad login, anyconnect
+#     prints "Login failed", fortinet's error page says "Permission denied")
+#   - a printed "Password:" prompt: with --passwd-on-stdin the first password
+#     is consumed silently, so a visible prompt can only be a re-ask (fortinet)
+auth_rejected() {
+    [ -s "$OC_LOG" ] || return 1
+    grep -qiE "login failed|authentication failed|permission denied|unexpected 512 result|access denied" "$OC_LOG" && return 0
+    grep -qE "^Password:" "$OC_LOG"
 }
 
 # stale leftovers from a previous run of this container (restart policy)
@@ -128,7 +142,11 @@ run_vpn() {
     fi
 
     log "connecting to $VPN_SERVER (protocol: $VPN_PROTOCOL, user: $VPN_USER)"
-    "${cmd[@]}" <"$PIPE" &
+    # Mirror openconnect's output into a file so the wait loops below can spot
+    # an authentication rejection (which otherwise looks exactly like "still
+    # waiting": openconnect just re-prompts on stdin and blocks).
+    : > "$OC_LOG"
+    "${cmd[@]}" <"$PIPE" > >(tee -a "$OC_LOG") 2> >(tee -a "$OC_LOG" >&2) &
     local oc_pid=$!
 
     # keep a writer fd open so openconnect doesn't see EOF between auth fields
@@ -148,6 +166,7 @@ run_vpn() {
         local waited=0 max_wait="$CODE_TIMEOUT"
         while [ ! -s "$AUTH/code" ]; do
             kill -0 "$oc_pid" 2>/dev/null || fail "openconnect exited during authentication"
+            auth_rejected && fail "the VPN rejected the credentials (wrong password?) — check vpn.password in the config"
             waited=$((waited + 1))
             [ "$waited" -ge "$max_wait" ] && fail "no verification code within ${max_wait}s; aborting"
             sleep 1
@@ -162,6 +181,7 @@ run_vpn() {
     local i=0
     while ! ip -4 addr show tun0 2>/dev/null | grep -q inet; do
         kill -0 "$oc_pid" 2>/dev/null || fail "openconnect exited (authentication failed?)"
+        auth_rejected && fail "the VPN rejected the credentials (wrong password?) — check vpn.password in the config"
         i=$((i + 1))
         [ "$i" -ge "$TUN_TIMEOUT" ] && fail "tunnel did not come up within ${TUN_TIMEOUT}s"
         sleep 1
