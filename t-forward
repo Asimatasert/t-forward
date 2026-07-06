@@ -20,6 +20,9 @@ set -u
 
 VERSION="0.5.0"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
+# published multi-arch image pulled when $IMAGE is missing locally (set empty
+# to force a local build instead)
+HUB_IMAGE="${T_FORWARD_HUB_IMAGE:-asimatasert/t-forward}"
 CONFIG_DIR="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}"
 CONF_D="$CONFIG_DIR/conf.d"
 # transient auth files shared with containers; must be under $HOME so Docker
@@ -85,7 +88,19 @@ need_yq() {
 
 ensure_image() {
     docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
-    info "Image $IMAGE not found; building it..."
+    # Prefer the published multi-arch image (no build context needed — works
+    # when only the CLI is installed); fall back to a local build when offline
+    # or when HUB_IMAGE is unset.
+    if [ -n "$HUB_IMAGE" ]; then
+        info "Image $IMAGE not found; pulling $HUB_IMAGE:$VERSION..."
+        if docker pull "$HUB_IMAGE:$VERSION" >/dev/null 2>&1; then
+            docker tag "$HUB_IMAGE:$VERSION" "$IMAGE"
+            return 0
+        fi
+        info "pull failed; building locally..."
+    else
+        info "Image $IMAGE not found; building it..."
+    fi
     cmd_build
 }
 

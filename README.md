@@ -63,9 +63,13 @@ Access goes through **published port forwards** and an optional per-tunnel
 
 ```sh
 git clone https://github.com/Asimatasert/t-forward && cd t-forward
-./t-forward build                                     # build the container image
 ln -s "$PWD/t-forward" /usr/local/bin/t-forward       # or anywhere on PATH
 ```
+
+The container image is pulled automatically from
+[Docker Hub](https://hub.docker.com/r/asimatasert/t-forward) (multi-arch:
+amd64 + arm64) on first `up`. To build it locally instead, run
+`./t-forward build` — or set `T_FORWARD_HUB_IMAGE=""` to always build.
 
 ## Configure
 
