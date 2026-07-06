@@ -266,16 +266,26 @@ func cloneForwards(t Tunnel) Tunnel {
 	return t
 }
 
+// publishBind is the address forwards publish on when a forward doesn't set its
+// own BIND:PORT — mirrors the CLI's T_FORWARD_BIND so a configured (down) tunnel
+// displays the same bind it will actually use once up.
+var publishBind = func() string {
+	if b := os.Getenv("T_FORWARD_BIND"); b != "" {
+		return b
+	}
+	return "127.0.0.1"
+}()
+
 // localSpec normalises a forward's local side: "any"/"" -> auto port, a bare
-// port -> 127.0.0.1:port, a bind:port stays as written.
+// port -> <bind>:port, a bind:port stays as written.
 func localSpec(lspec string) string {
 	switch {
 	case lspec == "any" || lspec == "":
-		return "127.0.0.1:auto"
+		return publishBind + ":auto"
 	case strings.Contains(lspec, ":"):
 		return lspec
 	default:
-		return "127.0.0.1:" + lspec
+		return publishBind + ":" + lspec
 	}
 }
 
