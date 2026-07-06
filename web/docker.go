@@ -104,6 +104,10 @@ type Docker struct {
 	confDir  string // <config-dir>/conf.d
 	stateDir string // <config-dir>/.auth
 	tfPath   string // t-forward CLI, for auto-supplying TOTP codes
+	// allowTotpCmd gates auto-execution of a tunnel's totp_command (sh -c). Off by
+	// default: it is arbitrary command execution as the daemon user, so it must be
+	// switched on explicitly (-allow-totp-command / TF_ALLOW_TOTP_COMMAND).
+	allowTotpCmd bool
 
 	mu      sync.Mutex
 	tailers map[string]*tailer   // container name -> active tailer
@@ -834,6 +838,15 @@ func (d *Docker) maybeAutoCode(ctx context.Context, tun string) {
 	if err != nil || c == nil || strings.TrimSpace(c.TotpCommand) == "" {
 		return
 	}
+	// totp_command is arbitrary shell run as the daemon user; never auto-execute it
+	// unless the operator explicitly opted in when starting the daemon.
+	if !d.allowTotpCmd {
+		d.hub.Broadcast("event", map[string]any{
+			"ts": "", "level": "error", "tun": tun,
+			"msg": "totp_command is set but auto-exec is disabled; start the daemon with -allow-totp-command to enable it",
+		})
+		return
+	}
 	cmdStr := c.TotpCommand
 	go func() {
 		cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -1159,10 +1172,19 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 // the tunnel's container (bash /dev/tcp; bash ships in the image). A blank port
 // falls back to an ICMP ping.
 func reachInContainer(ctx context.Context, cname, ip, port string) bool {
+	// ip/port originate from the config file and are interpolated into a bash
+	// -c string inside the container; validate them strictly so a crafted host IP
+	// or remote port can never smuggle shell metacharacters into that command.
+	if net.ParseIP(ip) == nil {
+		return false
+	}
 	c, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	if port == "" {
 		return exec.CommandContext(c, "docker", "exec", cname, "ping", "-c", "1", "-W", "1", ip).Run() == nil
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return false
 	}
 	return exec.CommandContext(c, "docker", "exec", cname,
 		"timeout", "2", "bash", "-c", "exec 3<>/dev/tcp/"+ip+"/"+port).Run() == nil

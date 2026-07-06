@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,13 +26,23 @@ var panelFS embed.FS
 
 func main() {
 	var (
-		addr      = flag.String("addr", "127.0.0.1:8787", "listen address (127.0.0.1 only)")
-		tokenFile = flag.String("token-file", "", "path to a file containing the auth token (preferred over argv; default: TF_WEB_TOKEN env or random)")
-		tfPath    = flag.String("tf", "t-forward", "path to the t-forward CLI")
-		configDir = flag.String("config-dir", defaultConfigDir(), "t-forward config directory")
-		noAuth    = flag.Bool("no-auth", false, "disable the token check entirely — ONLY safe when bound to a trusted private address (e.g. a tailnet IP), since anyone who can reach it gets full control")
+		addr         = flag.String("addr", "127.0.0.1:8787", "listen address (127.0.0.1 only)")
+		tokenFile    = flag.String("token-file", "", "path to a file containing the auth token (preferred over argv; default: TF_WEB_TOKEN env or random)")
+		tfPath       = flag.String("tf", "t-forward", "path to the t-forward CLI")
+		configDir    = flag.String("config-dir", defaultConfigDir(), "t-forward config directory")
+		noAuth       = flag.Bool("no-auth", false, "disable the token check entirely — ONLY safe when bound to a trusted private address (e.g. a tailnet IP), since anyone who can reach it gets full control")
+		expose       = flag.Bool("expose", false, "permit -no-auth on a non-loopback bind (DANGEROUS: full control to anyone who can reach the address)")
+		allowedHosts = flag.String("allowed-hosts", "", "extra comma-separated Host header values to accept, besides loopback / the bind host / IP literals (DNS-rebinding guard)")
+		allowTotpCmd = flag.Bool("allow-totp-command", envBool("TF_ALLOW_TOTP_COMMAND"), "permit a tunnel's totp_command to be auto-executed (sh -c) to fetch a code; OFF by default because it is arbitrary command execution as the daemon user")
 	)
 	flag.Parse()
+
+	// -no-auth serves full control to anyone who can reach the socket. On a
+	// non-loopback bind that is the whole network, so require an explicit -expose
+	// acknowledgement rather than let a stray flag silently expose the host.
+	if *noAuth && !isLoopbackHost(hostOnly(*addr)) && !*expose {
+		log.Fatalf("-no-auth on a non-loopback address (%s) exposes full control to the network; re-run with -expose to confirm you intend this", *addr)
+	}
 
 	// Load the token WITHOUT ever accepting it as a literal flag value: a flag
 	// value is world-readable on Linux via /proc/<pid>/cmdline and `ps -ww`, so
@@ -58,6 +69,7 @@ func main() {
 
 	hub := NewHub()
 	dock := NewDocker(hub, *configDir, *tfPath)
+	dock.allowTotpCmd = *allowTotpCmd
 	scanner := NewScanner(hub, *configDir)
 	hub.SnapshotFn = func() (string, any) { return "state", dock.State() }
 	acts := NewActions(hub, dock, scanner, *tfPath)
@@ -75,6 +87,20 @@ func main() {
 		// The panel is rebuilt with the daemon; never let the browser serve a
 		// stale cached copy after an upgrade.
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		// The panel is reached once through /?token=<tok>; hand the secret off to a
+		// SameSite=Strict, HttpOnly cookie so every SUBSEQUENT request (SSE, polling,
+		// actions) authenticates via the cookie instead of a ?token= query string.
+		// That keeps the token out of per-request URLs (browser history, proxy logs)
+		// and — being SameSite=Strict — is never attached to a cross-site request.
+		if !*noAuth {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "tf_token",
+				Value:    tok,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+		}
 		_, _ = w.Write(panel)
 	})
 	mux.HandleFunc("/events", hub.ServeHTTP)
@@ -96,6 +122,10 @@ func main() {
 	if !*noAuth {
 		handler = tokenMiddleware(tok, mux)
 	}
+	// Outermost guard (runs even under -no-auth): reject DNS-rebinding Host values
+	// and browser-reported cross-site requests, so a malicious web page the operator
+	// visits cannot drive this loopback daemon.
+	handler = guardMiddleware(hostOnly(*addr), splitComma(*allowedHosts), handler)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -196,6 +226,13 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 		if got == "" {
 			got = r.Header.Get("X-Token")
 		}
+		// Cookie carries the token on every request after the initial panel load
+		// (set by the / handler), so SSE/polling/actions need no ?token= in the URL.
+		if got == "" {
+			if ck, err := r.Cookie("tf_token"); err == nil {
+				got = ck.Value
+			}
+		}
 		if got == "" {
 			got = r.URL.Query().Get("token")
 		}
@@ -205,6 +242,88 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// guardMiddleware defends the loopback daemon against being driven by a web page
+// the operator happens to visit. Two checks, both browser-supplied:
+//
+//   - Sec-Fetch-Site: modern browsers stamp cross-origin requests "cross-site";
+//     rejecting those blocks a malicious site's scripted fetch/XHR even under
+//     -no-auth. A top-level navigation (Sec-Fetch-Mode: navigate) is exempt so
+//     the operator can still click the /?token= link from anywhere (a chat app,
+//     the terminal); such a navigation cannot read a JSON response cross-origin
+//     and the mutating endpoints already reject non-JSON bodies. Non-browser
+//     clients (curl) omit the header and pass through (they still face the token
+//     check).
+//   - Host allowlist: a DNS-rebinding attack reaches 127.0.0.1 through a rogue
+//     *hostname*, so the Host header is that hostname — never loopback nor an IP
+//     literal. Accepting only loopback names, the configured bind host, IP-literal
+//     Hosts, and any operator-listed names rejects the rebind.
+func guardMiddleware(bindHost string, extra []string, next http.Handler) http.Handler {
+	allow := map[string]bool{"localhost": true}
+	if bindHost != "" && bindHost != "0.0.0.0" && bindHost != "::" {
+		allow[strings.ToLower(bindHost)] = true
+	}
+	for _, h := range extra {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			allow[h] = true
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+			http.Error(w, "cross-site request blocked", http.StatusForbidden)
+			return
+		}
+		if !hostAllowed(strings.ToLower(hostOnly(r.Host)), allow) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func hostAllowed(host string, allow map[string]bool) bool {
+	if host == "" { // HTTP/1.0 / some non-browser clients omit Host
+		return true
+	}
+	if allow[host] || isLoopbackHost(host) {
+		return true
+	}
+	// An IP-literal Host cannot be the target of DNS rebinding (rebinding needs a
+	// name that re-resolves), so it is safe to accept regardless of which IP.
+	return net.ParseIP(host) != nil
+}
+
+// hostOnly strips an optional :port from a host[:port] string.
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
+// isLoopbackHost reports whether h is localhost or a loopback IP literal.
+func isLoopbackHost(h string) bool {
+	if h == "" || strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func splitComma(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func trimBearer(h string) string {

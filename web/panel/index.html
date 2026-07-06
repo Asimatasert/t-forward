@@ -1908,7 +1908,12 @@ try {
     history.replaceState(null, "", u.pathname + u.search + u.hash);
   }
 } catch (e) { /* replaceState unavailable (e.g. file://); ignore */ }
-const withTok = (p) => p + (p.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
+// The daemon hands the token to a SameSite=Strict, HttpOnly cookie on the initial
+// /?token= load, so every subsequent request authenticates via that cookie (SSE
+// and fetch alike) — no need to append ?token= to any URL. fetch also sends the
+// in-memory token as an X-Token header as a belt-and-suspenders fallback; only
+// EventSource, which cannot set headers, depends solely on the cookie.
+const withTok = (p) => p;
 
 // POST an action to the daemon; body is JSON. Shows a toast with the outcome.
 async function action(path, body, okMsg) {

@@ -123,6 +123,9 @@ run_vpn() {
             | grep -oE 'pin-sha256:[A-Za-z0-9+/=]+' | head -1)
         if [ -n "$SERVERCERT" ]; then
             log "auto-detected servercert $SERVERCERT (not pre-pinned)"
+            log "SECURITY: trust-on-first-use — this run trusts whatever certificate the"
+            log "  server presented and CANNOT detect a first-connection MITM. Pin it in"
+            log "  the config (vpn.servercert: $SERVERCERT) to close that window."
         else
             log "no pin printed (certificate is CA-trusted or probe failed)"
         fi
@@ -206,6 +209,11 @@ run_ssh() {
     [ -s "$AUTH/ssh_key" ] || [ -s "$AUTH/password" ] \
         || fail "ssh needs /auth/ssh_key or /auth/password"
 
+    # StrictHostKeyChecking=accept-new trusts an unseen host key on first contact
+    # (trust-on-first-use): convenient, but the first connection cannot detect a
+    # MITM. The known_hosts file is per-run (under /auth), so every fresh tunnel is
+    # a first connection. Pre-seed /auth/known_hosts (or pin the key out of band)
+    # for sensitive hosts to close that window.
     local args=(-N -p "${SSH_PORT:-22}"
                 -o ExitOnForwardFailure=yes
                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
