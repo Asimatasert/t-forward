@@ -1973,6 +1973,17 @@ function applyState(list) {
       container: "tf-" + s.id,
       lan: (s.forwards || []).some((f) => (f.local || "").startsWith("0.0.0.0")),
     });
+    // live fields — also delivered via SSE, but folded into /state so a
+    // polling-only panel (SSE blocked, e.g. by an HTTP proxy) still shows
+    // throughput, reachability, subnet and clients
+    if (t.state === "on") {
+      t.rate = { tx: Number(s.txRate) || 0, rx: Number(s.rxRate) || 0 };
+      if (s.hostUp) t.hostUp = s.hostUp;
+      if (s.tunIP) t.tunIP = s.tunIP;
+      if (s.tunSubnet) t.tunSubnet = s.tunSubnet;
+      if (s.hostSubnets) t.hostSubnets = s.hostSubnets;
+      if (s.clients) t.clients = s.clients;
+    }
     // netinfo (VPN IP / subnet) is only meaningful while connected — drop it
     // when the tunnel isn't up so the map/panel don't show a stale segment
     if (t.state !== "on") { t.tunIP = ""; t.tunSubnet = ""; t.hostSubnets = {}; }

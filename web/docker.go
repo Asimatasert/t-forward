@@ -75,6 +75,27 @@ type Tunnel struct {
 	// the virtual subnet node the panel draws for it.
 	SubnetNotes map[string]string   `json:"subnetNotes,omitempty"`
 	SubnetTags  map[string][]string `json:"subnetTags,omitempty"`
+
+	// live fields — also streamed over SSE (stat/hosts/netinfo/clients), but
+	// included in /state too so the panel works by polling alone when the SSE
+	// stream is blocked (e.g. by an SSE-buffering HTTP proxy).
+	TxRate      int64             `json:"txRate,omitempty"`
+	RxRate      int64             `json:"rxRate,omitempty"`
+	HostUp      map[string]bool   `json:"hostUp,omitempty"`
+	TunIP       string            `json:"tunIP,omitempty"`
+	TunSubnet   string            `json:"tunSubnet,omitempty"`
+	HostSubnets map[string]string `json:"hostSubnets,omitempty"`
+	Clients     []Client          `json:"clients,omitempty"`
+}
+
+// liveData is the per-tunnel data the background loops compute; cached so State()
+// can fold it into /state (SSE-independent).
+type liveData struct {
+	txRate, rxRate   int64
+	hostUp           map[string]bool
+	tunIP, tunSubnet string
+	hostSubnets      map[string]string
+	clients          []Client
 }
 
 // Docker collects all the live readers backed by the docker/CLI.
@@ -92,6 +113,22 @@ type Docker struct {
 	// fork yq for every conf each time. Keyed by tunnel name, invalidated on the
 	// file's mtime/size changing.
 	confCache map[string]confCacheEntry
+
+	// latest live data per tunnel id (rates/reachability/netinfo/clients), so
+	// State() can include it without relying on the SSE stream.
+	live map[string]*liveData
+}
+
+// updateLive mutates (creating if needed) the cached live data for a tunnel id.
+func (d *Docker) updateLive(id string, fn func(*liveData)) {
+	d.mu.Lock()
+	ld := d.live[id]
+	if ld == nil {
+		ld = &liveData{}
+		d.live[id] = ld
+	}
+	fn(ld)
+	d.mu.Unlock()
 }
 
 type confCacheEntry struct {
@@ -120,6 +157,7 @@ func NewDocker(hub *Hub, configDir, tfPath string) *Docker {
 		lastNet:   make(map[string]netSample),
 		armed:     make(map[string]bool),
 		confCache: make(map[string]confCacheEntry),
+		live:      make(map[string]*liveData),
 	}
 }
 
@@ -248,8 +286,19 @@ func (d *Docker) State() []Tunnel {
 		byID[name] = &t
 	}
 
+	// fold in the latest live data (rates/reachability/netinfo/clients) so a
+	// polling-only panel (SSE blocked) still gets everything
 	res := make([]Tunnel, 0, len(byID))
 	for _, t := range byID {
+		if t.State == "on" {
+			d.mu.Lock()
+			if ld := d.live[t.ID]; ld != nil {
+				t.TxRate, t.RxRate = ld.txRate, ld.rxRate
+				t.HostUp, t.TunIP, t.TunSubnet = ld.hostUp, ld.tunIP, ld.tunSubnet
+				t.HostSubnets, t.Clients = ld.hostSubnets, ld.clients
+			}
+			d.mu.Unlock()
+		}
 		res = append(res, *t)
 	}
 	sort.Slice(res, func(i, j int) bool { return res[i].ID < res[j].ID })
@@ -395,6 +444,7 @@ func (d *Docker) sampleStats(ctx context.Context) {
 		if id == "" {
 			id = strings.TrimPrefix(st.Name, "tf-")
 		}
+		d.updateLive(id, func(ld *liveData) { ld.txRate, ld.rxRate = int64(txRate), int64(rxRate) })
 		d.hub.Broadcast("stat", map[string]any{
 			"id":     id,
 			"txRate": int64(txRate),
@@ -895,6 +945,8 @@ func (d *Docker) ClientsLoop(ctx context.Context) {
 		}
 
 		for tun, cs := range byTun {
+			cs := cs
+			d.updateLive(tun, func(ld *liveData) { ld.clients = cs })
 			d.hub.Broadcast("clients", map[string]any{"tun": tun, "clients": cs})
 			for _, c := range cs {
 				key := tun + "|" + c.IP + "|" + strconv.Itoa(c.Port)
@@ -1058,21 +1110,31 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 				continue
 			}
 			cname := "tf-" + slugify(tn.ID)
-			up := map[string]bool{}
+			// probe reachability by a TCP connect to one of each host's forwarded
+			// ports (a real "can I reach the service" signal — ICMP ping is often
+			// blocked even when the ports are open)
+			probePort := map[string]string{}
+			var order []string
 			for _, f := range tn.Forwards {
-				ip := f.Remote
+				ip, port := f.Remote, ""
 				if i := strings.IndexByte(ip, ':'); i >= 0 {
-					ip = ip[:i]
+					ip, port = ip[:i], ip[i+1:]
 				}
 				if ip == "" {
 					continue
 				}
-				if _, done := up[ip]; done {
-					continue
+				if _, seen := probePort[ip]; !seen {
+					probePort[ip] = port
+					order = append(order, ip)
 				}
-				up[ip] = pingInContainer(ctx, cname, ip)
+			}
+			up := map[string]bool{}
+			for _, ip := range order {
+				up[ip] = reachInContainer(ctx, cname, ip, probePort[ip])
 			}
 			if len(up) > 0 {
+				upC := up
+				d.updateLive(tn.ID, func(ld *liveData) { ld.hostUp = upC })
 				d.hub.Broadcast("hosts", map[string]any{"tun": tn.ID, "up": up})
 			}
 			// our IP on the VPN (tun0) and which target hosts share our subnet
@@ -1083,18 +1145,27 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 				for ip := range up {
 					hostSubnets[ip] = subnetOf(ip, nets)
 				}
+				sub := subnetOf(tunIP, nets)
+				d.updateLive(tn.ID, func(ld *liveData) { ld.tunIP, ld.tunSubnet, ld.hostSubnets = tunIP, sub, hostSubnets })
 				d.hub.Broadcast("netinfo", map[string]any{
-					"tun": tn.ID, "ip": tunIP, "subnet": subnetOf(tunIP, nets), "hostSubnets": hostSubnets,
+					"tun": tn.ID, "ip": tunIP, "subnet": sub, "hostSubnets": hostSubnets,
 				})
 			}
 		}
 	}
 }
 
-func pingInContainer(ctx context.Context, cname, ip string) bool {
+// reachInContainer reports whether ip:port accepts a TCP connection from inside
+// the tunnel's container (bash /dev/tcp; bash ships in the image). A blank port
+// falls back to an ICMP ping.
+func reachInContainer(ctx context.Context, cname, ip, port string) bool {
 	c, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	return exec.CommandContext(c, "docker", "exec", cname, "ping", "-c", "1", "-W", "1", ip).Run() == nil
+	if port == "" {
+		return exec.CommandContext(c, "docker", "exec", cname, "ping", "-c", "1", "-W", "1", ip).Run() == nil
+	}
+	return exec.CommandContext(c, "docker", "exec", cname,
+		"timeout", "2", "bash", "-c", "exec 3<>/dev/tcp/"+ip+"/"+port).Run() == nil
 }
 
 // tunnelNet returns the container's tun0 address and the subnets routed over it
