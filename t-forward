@@ -31,6 +31,12 @@ LABEL="t-forward"
 INTERNAL_BASE=10000   # container-internal forward ports: 10001, 10002, ...
 SOCKS_INTERNAL=1080
 CONNECT_TIMEOUT="${T_FORWARD_CONNECT_TIMEOUT:-60}"
+# Address forwards publish on when a forward doesn't set its own BIND:PORT.
+# Defaults to loopback (reachable only from this host). Set to a specific
+# interface IP (e.g. a Tailscale IP) or 0.0.0.0 to reach the forwards from other
+# machines — do this ONLY on a trusted network, since the forwarded services get
+# no auth of their own.
+PUBLISH_BIND="${T_FORWARD_BIND:-127.0.0.1}"
 
 CONFIG_OPT=""         # --config FILE-or-DIR override
 
@@ -277,10 +283,10 @@ parse_forward() {
         && printf '%s' "$REMOTE_PORT" | grep -q '^[0-9][0-9]*$' \
         || die "invalid forward '$item' (expected LOCAL:RHOST:RPORT)"
     case "$lspec" in
-        any)  LOCAL_BIND="127.0.0.1"; LOCAL_PORT="" ;;
+        any)  LOCAL_BIND="$PUBLISH_BIND"; LOCAL_PORT="" ;;
         *:*)  LOCAL_BIND=${lspec%:*}; LOCAL_PORT=${lspec##*:}
               [ "$LOCAL_PORT" = "any" ] && LOCAL_PORT="" ;;
-        *)    LOCAL_BIND="127.0.0.1"; LOCAL_PORT=$lspec ;;
+        *)    LOCAL_BIND="$PUBLISH_BIND"; LOCAL_PORT=$lspec ;;
     esac
     if [ -n "$LOCAL_PORT" ] && ! printf '%s' "$LOCAL_PORT" | grep -q '^[0-9][0-9]*$'; then
         die "invalid forward local part in '$item' (expected PORT, any, or BIND:PORT)"

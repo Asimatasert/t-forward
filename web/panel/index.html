@@ -1755,13 +1755,15 @@ function copyText(s) {
   else toast(s);
 }
 
-// Everything is forwarded to localhost, so connection strings target 127.0.0.1
-// on the forward's (real, resolved) local port.
+// Connection strings target the host you reached the panel through (so a remote
+// panel gives a reachable address, not this browser's localhost) on the
+// forward's (real, resolved) local port.
 function localPort(f) { return (f.local || "").split(":").pop(); }
+function pubHost() { return location.hostname || "127.0.0.1"; }
 
 // service-aware connection string the copy button puts on the clipboard
 function connString(f) {
-  const L = localPort(f), H = "127.0.0.1", u = f.user || "user";
+  const L = localPort(f), H = pubHost(), u = f.user || "user";
   switch (f.service) {
     case "ssh":       return `ssh -p ${L} ${u}@${H}`;
     case "sftp":      return `sftp -P ${L} ${u}@${H}`;
@@ -1789,7 +1791,7 @@ function connString(f) {
 
 // a launchable URI for the "→" button, or null for CLI-only services
 function connURI(f) {
-  const L = localPort(f), H = "127.0.0.1";
+  const L = localPort(f), H = pubHost();
   switch (f.service) {
     case "http": case "http-alt": case "http-dev":
     case "kibana": case "elastic": case "rabbitmq":
