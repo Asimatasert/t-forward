@@ -1,5 +1,9 @@
 # t-forward
 
+[![Docker Hub](https://img.shields.io/docker/v/asimatasert/t-forward?label=docker%20hub&logo=docker)](https://hub.docker.com/r/asimatasert/t-forward)
+[![Image size](https://img.shields.io/docker/image-size/asimatasert/t-forward/latest?logo=docker&label=image)](https://hub.docker.com/r/asimatasert/t-forward/tags)
+[![Release](https://img.shields.io/github/v/release/Asimatasert/t-forward?logo=github)](https://github.com/Asimatasert/t-forward/releases)
+
 **Docker-based tunnel & port-forward manager.** Define your VPNs / SSH jumps /
 relays as small YAML files, bring them up with one command (each in its own
 isolated container), and reach everything through stable `localhost` ports — with
