@@ -18,7 +18,7 @@
 
 set -u
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
 CONFIG_DIR="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}"
 CONF_D="$CONFIG_DIR/conf.d"
