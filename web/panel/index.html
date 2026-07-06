@@ -1993,10 +1993,24 @@ function applyStat(s) {
   t.rate = { tx: Number(s.txRate) || 0, rx: Number(s.rxRate) || 0 };
 }
 
+// Pull the full state over plain HTTP. The panel used to rely ENTIRELY on the
+// SSE stream for state, so if that stream was slow to open (or blocked), the
+// panel stayed blank. This fetch guarantees the tunnels/ports show up, and a
+// poll below keeps them current whenever SSE goes quiet.
+let lastStateAt = 0;
+async function pullState() {
+  try {
+    const r = await fetch(withTok("/state"), { headers: { "X-Token": TOKEN } });
+    if (!r.ok) return;
+    applyState(await r.json());
+    lastStateAt = Date.now();
+  } catch (e) { /* offline; the poll retries */ }
+}
+
 let es = null;
 function connectSSE() {
   es = new EventSource(withTok("/events"));
-  es.addEventListener("state", (e) => { try { applyState(JSON.parse(e.data)); } catch {} });
+  es.addEventListener("state", (e) => { try { applyState(JSON.parse(e.data)); lastStateAt = Date.now(); } catch {} });
   es.addEventListener("stat",  (e) => { try { applyStat(JSON.parse(e.data)); } catch {} });
   es.addEventListener("event", (e) => {
     try { const d = JSON.parse(e.data); pushEvent(d.level || "log", d.tun || "", d.msg || ""); } catch {}
@@ -2049,6 +2063,10 @@ renderTagbar();
 layout();
 renderPanel();
 connectSSE();
+pullState();   // populate immediately over HTTP, independent of the SSE stream
+// fall back to polling whenever SSE hasn't delivered a state in a while (stream
+// slow to open, blocked, or dropped) so the panel never sits stale/blank
+setInterval(() => { if (Date.now() - lastStateAt > 8000) pullState(); }, 5000);
 // pull the last discovery snapshot once (SSE only pushes on change)
 fetch(withTok("/scan"), { headers: { "X-Token": TOKEN } })
   .then((r) => r.json())
