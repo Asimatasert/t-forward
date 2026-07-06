@@ -1215,7 +1215,7 @@ func tunnelNet(ctx context.Context, cname string) (string, []*net.IPNet) {
 			}
 			cidr := fields[0]
 			// skip host routes (/32 and bare IPs) — we want the pushed networks
-			// that define a real subnet (e.g. 10.176.0.0/16)
+			// that define a real subnet (e.g. 10.0.0.0/16)
 			if !strings.Contains(cidr, "/") || strings.HasSuffix(cidr, "/32") {
 				continue
 			}
