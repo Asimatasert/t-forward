@@ -30,7 +30,9 @@ NET_PREFIX="tf-net-"
 LABEL="t-forward"
 INTERNAL_BASE=10000   # container-internal forward ports: 10001, 10002, ...
 SOCKS_INTERNAL=1080
-CONNECT_TIMEOUT="${T_FORWARD_CONNECT_TIMEOUT:-60}"
+# 180s, not 60: openconnect can stall ~60s probing a half-broken DTLS transport
+# (handshake OK, tunnel MTU probe blackholed) before falling back to SSL.
+CONNECT_TIMEOUT="${T_FORWARD_CONNECT_TIMEOUT:-180}"
 # Address forwards publish on when a forward doesn't set its own BIND:PORT.
 # Defaults to loopback (reachable only from this host). Set to a specific
 # interface IP (e.g. a Tailscale IP) or 0.0.0.0 to reach the forwards from other
@@ -167,6 +169,7 @@ yaml_load() {
     VPN_USER=$(yqs "$file" .vpn.user);   PASSWORD=$(yqs "$file" .vpn.password)
     SERVERCERT=$(yqs "$file" .vpn.servercert); AUTHGROUP=$(yqs "$file" .vpn.authgroup)
     TOTP=$(yq -r '.vpn.totp // false' "$file"); TOTP_SECRET=$(yqs "$file" .vpn.totp_secret)
+    NO_DTLS=$(yq -r '.vpn.no_dtls // false' "$file")
     TOTP_COMMAND=$(yqs "$file" .totp_command)
     SSH_HOST=$(yqs "$file" .ssh.host);   SSH_PORT=$(yqs "$file" .ssh.port)
     SSH_USER=$(yqs "$file" .ssh.user);   SSH_KEY=$(yqs "$file" .ssh.key)
@@ -207,7 +210,7 @@ load_conf() {
     local file=$1
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
     AUTHGROUP="" TOTP=false TOTP_SECRET="" TOTP_COMMAND="" FORWARDS="" SOCKS="" RESTART=false
-    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT=""
+    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
     need_yq
     yaml_load "$file" || return 1
     [ -n "$NAME" ] || NAME=$(conf_name "$file")
@@ -442,7 +445,7 @@ up_one() {
             -e TUNNEL_TYPE="$TYPE" \
             -e VPN_SERVER="$SERVER" -e VPN_PROTOCOL="$PROTOCOL" \
             -e VPN_USER="$VPN_USER" -e SERVERCERT="$SERVERCERT" \
-            -e AUTHGROUP="$AUTHGROUP" -e TOTP="$TOTP" \
+            -e AUTHGROUP="$AUTHGROUP" -e TOTP="$TOTP" -e NO_DTLS="$NO_DTLS" \
             -e SSH_HOST="$SSH_HOST" -e SSH_PORT="$SSH_PORT" -e SSH_USER="$SSH_USER" \
             -e SSH_JUMP="$SSH_JUMP" \
             -e FORWARDS="$fwd_spec" -e SOCKS="$socks_enabled" \
@@ -509,7 +512,7 @@ cmd_up() {
     local names=() adhoc="" a_forwards=() f cli_restart="" cli_tags="" cli_noprompt=""
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
     AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
-    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT=""
+    SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -527,6 +530,7 @@ cmd_up() {
             --authgroup)  AUTHGROUP=$2; shift 2 ;;
             --totp)       TOTP=true; shift ;;
             --totp-secret) TOTP_SECRET=$2; shift 2 ;;
+            --no-dtls)    NO_DTLS=true; shift ;;
             --socks)      SOCKS=$2; shift 2 ;;
             --name)       NAME=$2; shift 2 ;;
             --forward)    a_forwards+=("$2"); adhoc=1; shift 2 ;;
@@ -805,7 +809,7 @@ Up options:
 
 Ad-hoc up (no config file), by tunnel type:
   vpn:    --server HOST --user U --protocol P [--servercert PIN]
-          [--authgroup G] [--totp] [--totp-secret S]
+          [--authgroup G] [--totp] [--totp-secret S] [--no-dtls]
   ssh:    --ssh-host HOST --ssh-user U [--ssh-port N] [--ssh-key PATH]
   local:  --type local --name NAME
   common: --password PW --socks PORT|any --name NAME
@@ -814,7 +818,7 @@ Ad-hoc up (no config file), by tunnel type:
 Config: one YAML file per tunnel in $CONF_D/<name>.yaml
   TYPE=vpn|ssh|local             (default vpn)
   vpn:    SERVER= PROTOCOL= VPN_USER= PASSWORD= SERVERCERT= AUTHGROUP=
-          TOTP=true|false TOTP_SECRET=
+          TOTP=true|false TOTP_SECRET= NO_DTLS=true|false
   ssh:    SSH_HOST= SSH_USER= SSH_PORT= SSH_KEY=~/.ssh/id_x  (or PASSWORD=)
   common: SOCKS=PORT|any RESTART=true|false TAGS="a b c"
           HOSTS=( "IP | note | RPORT:LPORT[@service] ..." )  # one host per line

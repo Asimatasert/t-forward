@@ -18,7 +18,7 @@
 # Environment:
 #   TUNNEL_TYPE                         vpn (default) | ssh | local
 #   VPN_SERVER, VPN_PROTOCOL, VPN_USER  (vpn)
-#   SERVERCERT, AUTHGROUP, TOTP         (vpn, optional)
+#   SERVERCERT, AUTHGROUP, TOTP, NO_DTLS (vpn, optional)
 #   SSH_HOST, SSH_USER, SSH_PORT        (ssh; port defaults to 22)
 #   SSH_JUMP="[user@]host[:port] ..."   (ssh; ordered ProxyJump hops to reach
 #                                        SSH_HOST — needs key auth, not password)
@@ -33,6 +33,12 @@ AUTH=/auth
 PIPE=/run/authpipe
 TYPE="${TUNNEL_TYPE:-vpn}"
 TUN_TIMEOUT="${CONNECT_TIMEOUT:-60}"
+# How long a manual-TOTP container waits for the host to deliver the code. This
+# is deliberately generous and independent of TUN_TIMEOUT: the code arrives by
+# SMS/mail only after the password is submitted (often 1-2 min), then a human
+# has to read and type it. Bounded only so an abandoned detached handoff (panel
+# closed, host crashed) self-terminates instead of blocking forever.
+CODE_TIMEOUT="${CODE_TIMEOUT:-600}"
 
 log() { echo "[t-forward] $*"; }
 
@@ -91,11 +97,32 @@ run_vpn() {
 
     mkfifo "$PIPE"
 
+    # No pinned servercert -> probe the server once to learn its current
+    # certificate pin and trust it (Trust-On-First-Use). openconnect prints the
+    # pin when the cert isn't already trusted; --non-inter makes it abort instead
+    # of prompting. This avoids re-pinning by hand every time the VPN rotates its
+    # cert, at the cost of MITM protection (same as accepting the cert manually).
+    if [ -z "${SERVERCERT:-}" ]; then
+        log "no servercert pinned; probing the server certificate…"
+        SERVERCERT=$(timeout 25 openconnect --protocol="$VPN_PROTOCOL" "$VPN_SERVER" \
+            --user="$VPN_USER" --non-inter </dev/null 2>&1 \
+            | grep -oE 'pin-sha256:[A-Za-z0-9+/=]+' | head -1)
+        if [ -n "$SERVERCERT" ]; then
+            log "auto-detected servercert $SERVERCERT (not pre-pinned)"
+        else
+            log "no pin printed (certificate is CA-trusted or probe failed)"
+        fi
+    fi
+
     local cmd=(openconnect --protocol="$VPN_PROTOCOL" "$VPN_SERVER"
                --user="$VPN_USER" --passwd-on-stdin --interface=tun0
                --reconnect-timeout 300)
     [ -n "${SERVERCERT:-}" ] && cmd+=(--servercert "$SERVERCERT")
     [ -n "${AUTHGROUP:-}" ] && cmd+=(--authgroup "$AUTHGROUP")
+    # Some gateways half-break DTLS: the handshake succeeds but the in-tunnel
+    # MTU probe is blackholed, stalling openconnect ~60s before it falls back
+    # to SSL. no_dtls skips UDP entirely and tunnels over TLS from the start.
+    [ "${NO_DTLS:-false}" = "true" ] && cmd+=(--no-dtls)
     if [ -s "$AUTH/totp_secret" ]; then
         cmd+=(--token-mode=totp --token-secret="@$AUTH/totp_secret")
     fi
@@ -118,7 +145,7 @@ run_vpn() {
         log "password sent; waiting for verification code from the host"
         # Bound the wait so an abandoned detached handoff (host crashed / never
         # ran `t-forward code`) self-terminates instead of blocking forever.
-        local waited=0 max_wait=$((TUN_TIMEOUT + 120))
+        local waited=0 max_wait="$CODE_TIMEOUT"
         while [ ! -s "$AUTH/code" ]; do
             kill -0 "$oc_pid" 2>/dev/null || fail "openconnect exited during authentication"
             waited=$((waited + 1))

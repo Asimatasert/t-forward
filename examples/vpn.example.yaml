@@ -11,11 +11,17 @@ vpn:
   protocol: fortinet              # fortinet | gp | anyconnect | nc | pulse | f5 | array
   user: username1
   password: password1             # omit -> prompted at connect time
-  servercert: pin-sha256:...      # optional; on a mismatch the log prints the real pin
+  servercert: pin-sha256:...      # optional; on a mismatch the log prints the real pin.
+                                  # empty/omitted -> the current pin is probed and trusted
+                                  # automatically (survives cert rotation, but no MITM
+                                  # protection — pin it to lock the identity down)
   authgroup: ""                   # optional
   totp: false                     # true -> prompted for a code after the password is
                                   #         sent (the SMS / mail / Telegram flow)
   totp_secret: ""                 # optional base32 secret -> code generated automatically
+  no_dtls: false                  # true -> tunnel over TLS only; for gateways whose UDP
+                                  #         transport is half-broken (DTLS handshake OK
+                                  #         but the tunnel stalls ~60s, then falls back)
 
 socks: 1080                    # optional SOCKS5 proxy port ("any" = random free port)
 # restart: true                # optional: auto-reconnect after crash/reboot
