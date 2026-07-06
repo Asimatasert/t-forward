@@ -732,6 +732,32 @@ function visibleTunnels() {
     (stateFilter === "all" || (stateFilter === "on" ? t.state === "on" : t.state !== "on")));
 }
 
+/* ---- virtual subnet resolution ----
+   Every VPN's hosts sit behind a virtual network segment. Resolve a host's
+   segment in order: live netinfo (what the tunnel actually reported) ->
+   configured `subnets:` annotations -> a synthesized /24 from the host's IP,
+   so the virtual column shows for every VPN, connected or not. */
+function ipToInt(ip) {
+  const p = ip.split(".").map(Number);
+  return (p.length === 4 && p.every((n) => Number.isInteger(n) && n >= 0 && n <= 255))
+    ? (((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0) : null;
+}
+function inCidr(ip, cidr) {
+  const [base, bits] = String(cidr).split("/");
+  const b = ipToInt(base), a = ipToInt(ip), n = +bits;
+  if (b === null || a === null || !(n >= 0 && n <= 32)) return false;
+  const mask = n === 0 ? 0 : ((~0 << (32 - n)) >>> 0);
+  return ((a & mask) >>> 0) === ((b & mask) >>> 0);
+}
+function subnetFor(t, ip) {
+  const live = (t.state === "on" && t.hostSubnets && t.hostSubnets[ip]) || "";
+  if (live) return live;
+  const conf = Object.keys(t.subnetNotes || {}).find((c) => inCidr(ip, c));
+  if (conf) return conf;
+  if (t.type !== "vpn") return "";       // ssh/local keep their direct legs
+  return ipToInt(ip) === null ? "" : ip.split(".").slice(0, 3).join(".") + ".0/24";
+}
+
 function layout() {
   if (view === "lan") { layoutScan(); drawStatic(); return; }
   const vis = visibleTunnels();
@@ -769,10 +795,10 @@ function layout() {
   const H = Math.max(availH, y + 16);
 
   // A virtual "subnet" column sits between the container and its hosts whenever
-  // the tunnel reported a VPN subnet (netinfo). When nothing has a subnet we
-  // reclaim that space so the wires don't stretch across an empty column.
-  const anySub = vis.some((t) => t.state === "on" && t.tunSubnet &&
-    t.hostSubnets && Object.values(t.hostSubnets).some(Boolean));
+  // any tunnel resolves one (live netinfo, configured, or synthesized — see
+  // subnetFor). When nothing has a subnet we reclaim that space so the wires
+  // don't stretch across an empty column.
+  const anySub = rows.some((r) => r.targets.some((ip) => subnetFor(r.t, ip)));
   const xYou = Math.max(130, W * 0.12);
   const xCont = anySub ? W * 0.33 : W * 0.44;
   const xSubnet = W * 0.575;
@@ -868,14 +894,14 @@ function layout() {
     // one hop everything talks through); hosts with no subnet keep a direct leg.
     const bySub = {};
     tnodes.forEach((tn) => {
-      const sub = (t.state === "on" && t.hostSubnets) ? (t.hostSubnets[tn.ip] || "") : "";
+      const sub = subnetFor(t, tn.ip);
       if (sub) (bySub[sub] || (bySub[sub] = [])).push(tn);
       else edges.push({ kind: "leg", from: cont, to: tn, t });
     });
     Object.keys(bySub).forEach((cidr) => {
       const members = bySub[cidr];
       const cyS = members.reduce((s, n) => s + n.y, 0) / members.length;
-      const note = (t.subnetNotes && t.subnetNotes[cidr]) || "";
+      const note = (t.subnetNotes && t.subnetNotes[cidr]) || "virtual";
       const ourIP = (t.tunSubnet === cidr && t.tunIP) ? t.tunIP : "";
       const info = `${members.length} host${members.length > 1 ? "s" : ""}${ourIP ? " · you " + ourIP : ""}`;
       ctx.font = `600 ${Math.max(9.5, 11.5 * z)}px ${MONO}`;
@@ -884,7 +910,8 @@ function layout() {
       sw = Math.max(sw, ctx.measureText(info).width, note ? ctx.measureText(note).width : 0);
       const w = Math.max(150 * z, sw + 26 * z);
       const h = (note ? 62 : 50) * z;
-      const sn = { kind: "subnet", t, cidr, x: xSubnet, y: cyS, w, h, ip: ourIP, note, info };
+      const sn = { kind: "subnet", t, cidr, x: xSubnet, y: cyS, w, h, ip: ourIP, note, info,
+        off: t.state !== "on" };
       nodes.push(sn);
       edges.push({ kind: "subtrunk", from: cont, to: sn, t });
       members.forEach((tn) => edges.push({ kind: "leg", from: sn, to: tn, t }));
@@ -1035,11 +1062,12 @@ function drawNode(n) {
     if (n.off) { ctx.globalAlpha = 0.4; ctx.setLineDash([4, 4]); }
   } else if (n.kind === "subnet") {
     // a "virtual" network segment — steel accent + dashed outline to read as
-    // logical, not a real box
+    // logical, not a real box; dimmed like targets when the tunnel is down
     ctx.fillStyle = T.steel + "14";
     ctx.strokeStyle = isSel ? T.steel : T.steel + "88";
     ctx.lineWidth = isSel ? 2 : 1.2;
     ctx.setLineDash([5, 3]);
+    if (n.off) ctx.globalAlpha = 0.4;
   } else if (n.kind === "hop") {
     // an ssh ProxyJump hop; the landing host (last hop) gets a steel accent
     ctx.fillStyle = T.raise;
@@ -1057,7 +1085,7 @@ function drawNode(n) {
   ctx.roundRect(x, y, n.w, n.h, 8 * z);
   ctx.fill(); ctx.stroke();
   ctx.setLineDash([]);
-  if (!(n.kind === "target" && n.off)) ctx.globalAlpha = 1;
+  if (!((n.kind === "target" || n.kind === "subnet") && n.off)) ctx.globalAlpha = 1;
   // clip text to the box so nothing overflows the rounded rect
   ctx.beginPath(); ctx.roundRect(x + 1, y + 1, n.w - 2, n.h - 2, 7 * z); ctx.clip();
 
@@ -1075,6 +1103,17 @@ function drawNode(n) {
     ctx.font = `${f2}px ${MONO}`;
     const info = st === "on" ? `↑${fmtRate(n.t.rate.tx)} ↓${fmtRate(n.t.rate.rx)}` : st.toUpperCase();
     ctx.fillText(`${n.t.type.toUpperCase()} ${info}`, x + 24 * z, n.y + 11 * z);
+    if (n.t.totp) {
+      // TOTP tunnel: a small key at the far left — "asks for a code" marker
+      ctx.strokeStyle = T.warn; ctx.lineWidth = 1.2 * z; ctx.lineCap = "round";
+      const kx = x + 10 * z, ky = n.y + 11 * z;
+      ctx.beginPath(); ctx.arc(kx - 1.5 * z, ky, 2.4 * z, 0, 7); ctx.stroke();   // bow
+      ctx.beginPath();
+      ctx.moveTo(kx + 0.9 * z, ky); ctx.lineTo(kx + 8.5 * z, ky);                // shaft
+      ctx.moveTo(kx + 5.8 * z, ky); ctx.lineTo(kx + 5.8 * z, ky + 2.6 * z);      // tooth
+      ctx.moveTo(kx + 8.5 * z, ky); ctx.lineTo(kx + 8.5 * z, ky + 2.6 * z);      // tooth
+      ctx.stroke();
+    }
   } else if ((n.kind === "target" || n.kind === "device") && n.lines) {
     if (n.kind === "target") {
       // reachability dot (top-right): green up / red down / gray unknown
@@ -1602,8 +1641,10 @@ function renderSubnet(el, tunId, cidr) {
   const note = (t.subnetNotes && t.subnetNotes[cidr]) || "";
   const tags = (t.subnetTags && t.subnetTags[cidr]) || [];
   const ourHere = t.tunSubnet === cidr && t.tunIP;
-  // member hosts: those the tunnel currently places in this subnet
-  const members = Object.keys(t.hostSubnets || {}).filter((ip) => t.hostSubnets[ip] === cidr);
+  // member hosts: those the tunnel places in this subnet (live, configured,
+  // or synthesized — same resolution the map uses)
+  const members = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))]
+    .filter((ip) => subnetFor(t, ip) === cidr);
   const memberHtml = members.length ? `
     <div class="sec">Hosts on this segment</div>
     <div class="ports">
@@ -1751,8 +1792,27 @@ function toast(msg) {
 }
 
 function copyText(s) {
-  if (navigator.clipboard) navigator.clipboard.writeText(s).then(() => toast("copied " + s), () => toast(s));
-  else toast(s);
+  const done = () => toast("copied " + s);
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(s).then(done, () => (legacyCopy(s) ? done() : toast(s)));
+    return;
+  }
+  legacyCopy(s) ? done() : toast(s);
+}
+// navigator.clipboard exists only in secure contexts (https/localhost); a panel
+// served over plain http needs the deprecated-but-working execCommand path.
+function legacyCopy(s) {
+  const ta = document.createElement("textarea");
+  ta.value = s;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, s.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  return ok;
 }
 
 // Connection strings target the host you reached the panel through (so a remote
@@ -2023,13 +2083,35 @@ async function pullState() {
   } catch (e) { /* offline; the poll retries */ }
 }
 
+// Console fallback: when the SSE stream is buffered by a proxy (nothing gets
+// through), poll /evlog for the recorded events the stream would have carried.
+// evSeq is the shared cursor — SSE-delivered events advance it too (they carry
+// their seq), so switching between paths never duplicates a console line.
+let evSeq = 0;
+async function pullEvlog() {
+  try {
+    const r = await fetch(withTok("/evlog?since=" + evSeq), { headers: { "X-Token": TOKEN } });
+    if (!r.ok) return;
+    const d = await r.json();
+    (d.events || []).forEach((e) => {
+      const ev = e.ev || {};
+      pushEvent(ev.level || "log", ev.tun || "", ev.msg || "");
+    });
+    if (d.seq > evSeq) evSeq = d.seq;
+  } catch (e) { /* offline; the poll retries */ }
+}
+
 let es = null;
 function connectSSE() {
   es = new EventSource(withTok("/events"));
   es.addEventListener("state", (e) => { try { applyState(JSON.parse(e.data)); lastStateAt = Date.now(); } catch {} });
   es.addEventListener("stat",  (e) => { try { applyStat(JSON.parse(e.data)); } catch {} });
   es.addEventListener("event", (e) => {
-    try { const d = JSON.parse(e.data); pushEvent(d.level || "log", d.tun || "", d.msg || ""); } catch {}
+    try {
+      const d = JSON.parse(e.data);
+      if (d.seq > evSeq) evSeq = d.seq;   // keep the /evlog cursor in step
+      pushEvent(d.level || "log", d.tun || "", d.msg || "");
+    } catch {}
   });
   es.addEventListener("clients", (e) => {
     try {
@@ -2083,6 +2165,9 @@ pullState();   // populate immediately over HTTP, independent of the SSE stream
 // fall back to polling whenever SSE hasn't delivered a state in a while (stream
 // slow to open, blocked, or dropped) so the panel never sits stale/blank
 setInterval(() => { if (Date.now() - lastStateAt > 8000) pullState(); }, 5000);
+pullEvlog();   // seed the console with recent history (SSE has no replay)
+// same gate for the console: a dead SSE stream also delivers no state frames
+setInterval(() => { if (Date.now() - lastStateAt > 8000) pullEvlog(); }, 4000);
 // pull the last discovery snapshot once (SSE only pushes on change)
 fetch(withTok("/scan"), { headers: { "X-Token": TOKEN } })
   .then((r) => r.json())

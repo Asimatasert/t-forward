@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -19,7 +20,24 @@ type Hub struct {
 	// SnapshotFn returns the event type and payload sent to a client the
 	// moment it connects (a full 'state' snapshot).
 	SnapshotFn func() (string, any)
+
+	// Recent 'event' frames, kept so browsers whose SSE stream is buffered by
+	// an intermediary proxy can poll GET /evlog?since=SEQ instead and still
+	// render the console.
+	evMu   sync.Mutex
+	evSeq  int64
+	evRing []evEntry
 }
+
+// evEntry is one recorded console event with its monotonically-increasing id.
+type evEntry struct {
+	Seq int64 `json:"seq"`
+	Ev  any   `json:"ev"`
+}
+
+// evCap bounds the ring; old entries fall off (a late poller just misses them,
+// same as a lossy SSE drop).
+const evCap = 250
 
 // client holds the two delivery paths for one connected browser.
 //
@@ -69,6 +87,21 @@ func pushState(ch chan []byte, f []byte) {
 // hub. 'state' frames take the guaranteed coalesce-latest path; all other
 // frames take the lossy path and may be dropped for a slow client.
 func (h *Hub) Broadcast(eventType string, payload any) {
+	if eventType == "event" {
+		h.evMu.Lock()
+		h.evSeq++
+		// Stamp the seq into the SSE payload too, so a client that receives an
+		// event live can advance its /evlog cursor and never re-render it as a
+		// duplicate when it later falls back to polling.
+		if m, ok := payload.(map[string]any); ok {
+			m["seq"] = h.evSeq
+		}
+		h.evRing = append(h.evRing, evEntry{Seq: h.evSeq, Ev: payload})
+		if len(h.evRing) > evCap {
+			h.evRing = h.evRing[len(h.evRing)-evCap:]
+		}
+		h.evMu.Unlock()
+	}
 	f := frame(eventType, payload)
 	reliable := eventType == "state"
 	h.mu.Lock()
@@ -101,6 +134,22 @@ func (h *Hub) unregister(c *client) {
 	h.mu.Lock()
 	delete(h.clients, c)
 	h.mu.Unlock()
+}
+
+// ServeEvLog answers the polling fallback for the console: the recorded events
+// newer than ?since=SEQ plus the current sequence, as plain JSON.
+func (h *Hub) ServeEvLog(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	h.evMu.Lock()
+	out := make([]evEntry, 0, 16)
+	for _, e := range h.evRing {
+		if e.Seq > since {
+			out = append(out, e)
+		}
+	}
+	seq := h.evSeq
+	h.evMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"seq": seq, "events": out})
 }
 
 // ServeHTTP streams events to a single client until its request context is

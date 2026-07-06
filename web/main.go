@@ -78,6 +78,7 @@ func main() {
 		_, _ = w.Write(panel)
 	})
 	mux.HandleFunc("/events", hub.ServeHTTP)
+	mux.HandleFunc("/evlog", hub.ServeEvLog)
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, dock.State())
 	})
