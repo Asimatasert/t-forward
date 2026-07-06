@@ -369,6 +369,12 @@ func (s *Scanner) scan(ctx context.Context, conf scanConf, only string) {
 			cidr = ifc.CIDR // explicit override
 		}
 		cidr = widenHostCIDR(ip, cidr) // a /32 (tun/tailscale) -> its /24
+		// Validate before it becomes an nmap argv token: an override like
+		// "--script=…" from scan.yaml would otherwise be parsed as an option,
+		// not a target. Must be a real CIDR.
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			cidr = ""
+		}
 		if cidr == "" {
 			results[i] = scanIfaceResult{Name: ifc.Name, IP: ip, CIDR: "", Devices: nil}
 			publish(true)

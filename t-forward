@@ -237,11 +237,19 @@ load_conf() {
 # directory doesn't break commands that touch every conf.
 validate_conf() {
     local n=$1
+    # A value that begins with '-' would be parsed by openconnect/ssh as an
+    # option, not data — and openconnect's --script/--csd-wrapper run commands.
+    # Reject option-shaped server/user/host/group up front (container-confined,
+    # but this closes a config-authored code-exec-in-container vector).
+    no_dash() { case "$2" in -*) warn "$n: $1 must not start with '-' ('$2')"; return 1 ;; esac; return 0; }
     case "$TYPE" in
         vpn)
             [ -n "$SERVER" ]   || { warn "$n: SERVER is required"; return 1; }
             [ -n "$PROTOCOL" ] || { warn "$n: PROTOCOL is required"; return 1; }
             [ -n "$VPN_USER" ] || { warn "$n: VPN_USER is required"; return 1; }
+            no_dash SERVER "$SERVER" || return 1
+            no_dash VPN_USER "$VPN_USER" || return 1
+            no_dash AUTHGROUP "$AUTHGROUP" || return 1
             case "$PROTOCOL" in
                 fortinet|gp|anyconnect|nc|pulse|f5|array) : ;;
                 *) warn "$n: unsupported PROTOCOL '$PROTOCOL'"; return 1 ;;
@@ -249,6 +257,8 @@ validate_conf() {
         ssh)
             [ -n "$SSH_HOST" ] || { warn "$n: SSH_HOST is required"; return 1; }
             [ -n "$SSH_USER" ] || { warn "$n: SSH_USER is required"; return 1; }
+            no_dash SSH_HOST "$SSH_HOST" || return 1
+            no_dash SSH_USER "$SSH_USER" || return 1
             [ -z "$SSH_JUMP" ] || [ -n "$SSH_KEY" ] \
                 || { warn "$n: SSH_JUMP (multi-hop) needs SSH_KEY — password auth can't chain jumps"; return 1; } ;;
         local)
@@ -300,6 +310,11 @@ parse_forward() {
     [ "$lspec" != "$tmp" ] && [ -n "$REMOTE_HOST" ] \
         && printf '%s' "$REMOTE_PORT" | grep -q '^[0-9][0-9]*$' \
         || die "invalid forward '$item' (expected LOCAL:RHOST:RPORT)"
+    # REMOTE_HOST is embedded in a socat address ("TCP:host:port"), where a comma
+    # starts socat address options — restrict it to IP / DNS-label characters so a
+    # crafted host can't append socat options.
+    printf '%s' "$REMOTE_HOST" | grep -qE '^[A-Za-z0-9._-]+$' \
+        || die "invalid forward remote host '$REMOTE_HOST' (letters, digits, . _ - only)"
     case "$lspec" in
         any)  LOCAL_BIND="$PUBLISH_BIND"; LOCAL_PORT="" ;;
         *:*)  LOCAL_BIND=${lspec%:*}; LOCAL_PORT=${lspec##*:}
@@ -411,6 +426,11 @@ up_one() {
     # the entrypoint can re-authenticate after a crash/reboot restart, and in
     # --no-prompt mode so `t-forward code` can drop the verification code
     local authdir="$STATE_DIR/auth-$(slugify "$name")"
+    # tighten the parent too: without this it is created under the umask (0755),
+    # letting a co-located user enumerate tunnel names (the 700 subdirs still
+    # hide the secrets, but don't advertise the layout).
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
     rm -rf "$authdir"
     mkdir -p "$authdir"
     chmod 700 "$authdir"

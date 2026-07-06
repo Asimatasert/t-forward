@@ -249,12 +249,17 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 //
 //   - Sec-Fetch-Site: modern browsers stamp cross-origin requests "cross-site";
 //     rejecting those blocks a malicious site's scripted fetch/XHR even under
-//     -no-auth. A top-level navigation (Sec-Fetch-Mode: navigate) is exempt so
-//     the operator can still click the /?token= link from anywhere (a chat app,
-//     the terminal); such a navigation cannot read a JSON response cross-origin
-//     and the mutating endpoints already reject non-JSON bodies. Non-browser
-//     clients (curl) omit the header and pass through (they still face the token
-//     check).
+//     -no-auth. Only a top-level *GET/HEAD* navigation (Sec-Fetch-Mode: navigate)
+//     is exempt, so the operator can still click the /?token= link from anywhere
+//     (a chat app, the terminal); a cross-site navigation with an unsafe method
+//     (a forged <form method=POST> submit) is NOT exempt — that is the CSRF
+//     vector. Non-browser clients (curl) omit the header and pass through (they
+//     still face the token check).
+//   - Content-Type on state-changing methods: a browser <form> can only send
+//     text/plain, urlencoded, or multipart — never application/json — so
+//     requiring JSON on POST/PUT/DELETE blocks a forged cross-site form even on
+//     older browsers that don't send Sec-Fetch headers. The panel always sends
+//     application/json; curl callers must too.
 //   - Host allowlist: a DNS-rebinding attack reaches 127.0.0.1 through a rogue
 //     *hostname*, so the Host header is that hostname — never loopback nor an IP
 //     literal. Accepting only loopback names, the configured bind host, IP-literal
@@ -270,9 +275,28 @@ func guardMiddleware(bindHost string, extra []string, next http.Handler) http.Ha
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Mode") != "navigate" {
-			http.Error(w, "cross-site request blocked", http.StatusForbidden)
-			return
+		safeMethod := r.Method == http.MethodGet || r.Method == http.MethodHead
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			// exempt ONLY a safe-method top-level navigation (clicking the
+			// /?token= link); a cross-site POST/etc — scripted or a forged
+			// form submit — is always blocked.
+			navOK := safeMethod && r.Header.Get("Sec-Fetch-Mode") == "navigate"
+			if !navOK {
+				http.Error(w, "cross-site request blocked", http.StatusForbidden)
+				return
+			}
+		}
+		// Defense in depth (covers browsers that omit Sec-Fetch): a state-changing
+		// request must be application/json, which a cross-site <form> can never be.
+		if !safeMethod && r.Method != http.MethodOptions {
+			ct := r.Header.Get("Content-Type")
+			if i := strings.IndexByte(ct, ';'); i >= 0 {
+				ct = ct[:i]
+			}
+			if !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
+				http.Error(w, "unsupported media type: send application/json", http.StatusUnsupportedMediaType)
+				return
+			}
 		}
 		if !hostAllowed(strings.ToLower(hostOnly(r.Host)), allow) {
 			http.Error(w, "host not allowed", http.StatusForbidden)
