@@ -1149,6 +1149,7 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 			// gave a false UNREACHABLE when that port is firewalled by the VPN
 			// gateway but another (e.g. :80) is open.
 			hostPorts := map[string][]string{}
+			localOf := map[string]string{} // remote "ip:port" -> published local "host:port"
 			var order []string
 			for _, f := range tn.Forwards {
 				ip, port := f.Remote, ""
@@ -1162,10 +1163,17 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 					order = append(order, ip)
 				}
 				hostPorts[ip] = append(hostPorts[ip], port)
+				localOf[ip+":"+port] = f.Local
 			}
 			// Probe EVERY port (per-port dots in the panel), the ports of one host
 			// concurrently so a host with several firewalled ports still costs only
 			// ~one timeout. hostUp[ip] is the OR — the host is up if any port answers.
+			//
+			// vpn: probe the remote ip:port from INSIDE the container (the VPN route
+			// lives there). ssh/local: the container has no route to the remote — the
+			// traffic only flows through the ssh -L / socat forward — so probe the
+			// PUBLISHED local port from the host instead (a false red otherwise).
+			isVPN := tn.Type == "vpn" || tn.Type == ""
 			up := map[string]bool{}
 			portUp := map[string]bool{}
 			var pmu sync.Mutex
@@ -1176,10 +1184,15 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 					wg.Add(1)
 					go func(ip, port string) {
 						defer wg.Done()
-						ok := reachInContainer(ctx, cname, ip, port)
 						key := ip
 						if port != "" {
 							key = ip + ":" + port
+						}
+						var ok bool
+						if isVPN {
+							ok = reachInContainer(ctx, cname, ip, port)
+						} else {
+							ok = reachLocalPort(ctx, localOf[key])
 						}
 						pmu.Lock()
 						portUp[key] = ok
@@ -1234,6 +1247,26 @@ func reachInContainer(ctx context.Context, cname, ip, port string) bool {
 	}
 	return exec.CommandContext(c, "docker", "exec", cname,
 		"timeout", "2", "bash", "-c", "exec 3<>/dev/tcp/"+ip+"/"+port).Run() == nil
+}
+
+// reachLocalPort dials a published local "host:port" from the daemon host. It is
+// the reachability probe for ssh/local tunnels: their forward traffic only flows
+// through the ssh -L / socat listener, so the container itself has no route to
+// the remote — probing the remote from inside would always fail (a false red).
+// A successful dial means the forward listener is up and accepting.
+func reachLocalPort(ctx context.Context, hostPort string) bool {
+	if hostPort == "" || strings.HasSuffix(hostPort, ":auto") || strings.HasSuffix(hostPort, ":") {
+		return false
+	}
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var dl net.Dialer
+	conn, err := dl.DialContext(c, "tcp", hostPort)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // tunnelNet returns the container's tun0 address and the subnets routed over it
