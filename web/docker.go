@@ -1126,7 +1126,11 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 			// probe reachability by a TCP connect to one of each host's forwarded
 			// ports (a real "can I reach the service" signal — ICMP ping is often
 			// blocked even when the ports are open)
-			probePort := map[string]string{}
+			// Collect ALL forwarded ports per host (not just the first): a host is
+			// "reachable" if ANY of its ports answers. Probing only the first port
+			// gave a false UNREACHABLE when that port is firewalled by the VPN
+			// gateway but another (e.g. :80) is open.
+			hostPorts := map[string][]string{}
 			var order []string
 			for _, f := range tn.Forwards {
 				ip, port := f.Remote, ""
@@ -1136,14 +1140,21 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 				if ip == "" {
 					continue
 				}
-				if _, seen := probePort[ip]; !seen {
-					probePort[ip] = port
+				if _, seen := hostPorts[ip]; !seen {
 					order = append(order, ip)
 				}
+				hostPorts[ip] = append(hostPorts[ip], port)
 			}
 			up := map[string]bool{}
 			for _, ip := range order {
-				up[ip] = reachInContainer(ctx, cname, ip, probePort[ip])
+				reachable := false
+				for _, port := range hostPorts[ip] {
+					if reachInContainer(ctx, cname, ip, port) {
+						reachable = true
+						break // first port that answers -> host is reachable
+					}
+				}
+				up[ip] = reachable
 			}
 			if len(up) > 0 {
 				upC := up
