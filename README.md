@@ -170,6 +170,21 @@ code itself and no prompt appears. The web daemon can also inject codes without 
 stored secret: `POST /totp/<name> {code}` (a phone shortcut / bot), or a
 `totp_command:` in the conf whose stdout supplies the code.
 
+A **rejected password fails fast** with a clear error instead of hanging on the
+code prompt — so a wrong credential never masquerades as “still waiting”.
+
+## Connecting to awkward gateways (vpn)
+
+Two options smooth over real-world gateways:
+
+- **`servercert:` empty / omitted** → the current certificate pin is probed once
+  and trusted (trust-on-first-use). Survives a gateway rotating its cert without
+  re-pinning by hand; pin it explicitly to close the first-connection MITM window
+  (the log prints the exact pin to paste).
+- **`no_dtls: true`** → tunnel over TLS only. Some gateways complete the DTLS
+  (UDP) handshake but then black-hole the tunnel, stalling the connection; this
+  skips UDP entirely.
+
 ## Unattended / server mode
 
 `t-forward up office --restart` (or `restart: true` in the conf) sets the
@@ -202,14 +217,24 @@ The panel has **two canvases**, switched from the top bar:
 **Tunnels** — a live topology map, `YOU → container → target hosts`, with:
 - real packet-flow particles driven by per-tunnel throughput (`docker stats`),
   and a rolling TX/RX chart;
+- **pan & zoom** (drag empty space or scroll to zoom toward the cursor; `−/%/fit`
+  controls) and **draggable boxes** to hand-arrange the map — the arrangement is
+  saved **server-side**, so it looks the same on every machine; a **lock** guards
+  against accidental moves and a **reset** restores the auto layout;
+- **per-port reachability dots** (green reachable / red blocked / grey unknown)
+  next to every forward — so a host the gateway lets you reach on one port but
+  firewalls on another reads at a glance;
 - a filterable, level-tagged **network-event console** (connections, tunnel,
   auth, errors);
 - click any node to inspect it — copy ready-made connection strings
-  (`ssh -p … user@127.0.0.1`, `psql …`, `redis-cli …`), open http/vnc/rdp URIs,
+  (`ssh -p … user@host`, `psql …`, `redis-cli …`), open http/vnc/rdp URIs,
   edit names/tags/notes inline (written safely back to the YAML);
-- **subnet nodes** for the VPN network each tunnel discovers at runtime (hosts on
-  the same subnet can talk directly), and **jump-chain nodes** for multi-hop ssh;
-- up / down / retry / TOTP-code actions, tag & online/offline filters.
+- **virtual subnet nodes** for the network each host sits behind, **jump-chain
+  nodes** for multi-hop ssh, and **cross-tunnel jumps**: an ssh tunnel that rides
+  another tunnel's forward folds into it as one continuous `host → subnet →
+  jumped host` chain, to any depth;
+- a 🔑 marker on TOTP tunnels; up / down / retry / TOTP-code actions, tag &
+  online/offline filters.
 
 **LAN** — network discovery. Point [`scan.yaml`](examples/scan.example.yaml) at
 one or more interfaces and the daemon uses `nmap` to map reachable devices and
