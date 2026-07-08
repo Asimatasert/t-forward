@@ -51,7 +51,7 @@ Access goes through **published port forwards** and an optional per-tunnel
 - [TOTP flow](#totp-flow-vpn)
 - [Unattended / server mode](#unattended--server-mode)
 - [Web panel](#web-panel)
-- [How it works](#how-it-works)
+- [Architecture](#architecture)
 - [Security notes](#security-notes)
 - [License](#license)
 
@@ -249,21 +249,92 @@ Redis via `redis-cli`). Features:
   `any`-port `local` relay), per-port or all-at-once;
 - per-adapter rescan that updates one interface in place.
 
-## How it works
+## Architecture
 
-`t-forward up` writes credentials into a private tmpdir mounted at `/auth`,
-creates a dedicated Docker network, and starts the container
-(`--cap-add=NET_ADMIN --device /dev/net/tun`). The entrypoint brings up the
-tunnel for the configured type (openconnect via a stdin FIFO / `ssh -N` /
-nothing for `local`), then exposes forwards — `socat` listeners for vpn/local,
-native `-L`/`-D` for ssh — bound to the container's `eth0` only, deletes the
-credentials, and drops a `ready` marker the CLI waits for. **State lives in
-Docker itself** (`tf-<name>` containers with labels), so `status`, `logs` and
-`down` are thin wrappers over `docker ps` / `logs` / `rm`. The web daemon reads
-the same YAML (via `yq`) and Docker state; config edits from the panel are
-applied with `yq -i`, passing values only through environment variables so a
-crafted value can never inject yq/shell syntax, and never touching the
-credential keys.
+Two planes. A **control plane** — the `t-forward` bash CLI (and the optional Go
+web daemon) — that only ever talks to Docker and `yq`; and a **data plane** —
+one container per tunnel — that holds the actual tunnel and the forwards. The
+control plane keeps no state of its own: **state _is_ Docker**.
+
+### Connection flow
+
+What `t-forward up office` actually does, start to finish:
+
+```mermaid
+flowchart TD
+    A["t-forward up office"] --> B["① read office.yaml (yq)<br/>write creds → /auth (tmpdir 700;<br/>password / totp_secret / ssh_key each 600)"]
+    B --> C["② docker run tf-office<br/>own network · NET_ADMIN · /dev/net/tun<br/>-v /auth · -p host:port · non-secret env only"]
+    C --> D["③ entrypoint: openconnect<br/>← password over a stdin FIFO (never in ps/env)"]
+    D --> E{"totp?"}
+    E -- "no" --> G["④ tun0 comes up"]
+    E -- "yes" --> F["drop /auth/awaiting_code, wait for the code<br/>(auto from secret · SMS / mail typed in panel or CLI)"]
+    F -- "code fed" --> G
+    G --> H["⑤ start forwards (socat on eth0 / ssh -L)<br/>+ optional SOCKS5"]
+    H --> I["⑥ wipe /auth · drop the ready marker"]
+    I --> J(["office is up — reach services at host:port"])
+    D -. "credentials rejected" .-> X["abort with a clear error<br/>(never hangs at the code prompt)"]
+```
+
+`down` is just `docker rm -f tf-office` — the network namespace (routes, `tun0`,
+listeners) dies with the container, so there is nothing to unwind.
+
+### The data path
+
+Each tunnel is one container (`tf-<name>`) on its own Docker network. Inside it,
+the tunnel comes up and a small relay publishes each service on a host port:
+
+```mermaid
+flowchart LR
+    you["you"] -->|"host:2222 (published)"| socat
+    subgraph tf["tf-office · own network namespace"]
+        socat["socat :10001<br/>(or ssh -N -L)"] --> oc["openconnect<br/>tun0"]
+    end
+    oc -->|"VPN"| gw["vpn.example.com"]
+    gw --> target["10.0.0.20:22"]
+```
+
+- **vpn** — `openconnect` (fortinet/gp/anyconnect/…) on `tun0`; `socat` listeners
+  forward each `host:port → tun0 → remote`.
+- **ssh** — `ssh -N` with native `-L` forwards / `-D` SOCKS, optionally through a
+  multi-hop `ProxyJump` chain.
+- **local** — no tunnel; plain `socat` relays (pin a LAN/remote host:port to a
+  stable local port).
+
+Listeners bind the container's `eth0` (the Docker-published side) **only**, so
+nothing on the far side of a tunnel can reach a forward or the SOCKS proxy. The
+host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)
+to share forwards on a trusted network.
+
+### The auth bridge
+
+Credentials never sit on the host command line or in the container's env. `up`
+writes them into a private `700` tmpdir mounted at `/auth` (`password`,
+`totp_secret`, or an `ssh_key`, each `600`). The entrypoint feeds the password to
+openconnect over a stdin **FIFO** (so it never appears in `ps`), handles the TOTP
+code (auto from a secret, or waits for the host to drop `/auth/code`), then —
+once the tunnel is up — **wipes `/auth`** and drops a `ready` marker the CLI
+waits on. Only non-secret operands (`VPN_SERVER`, `VPN_USER`, the public
+`SERVERCERT` pin, `FORWARDS`, …) are passed as env.
+
+### State = Docker
+
+There is no database and no daemon-of-record. A tunnel’s existence, status and
+metadata live in the `tf-<name>` container and its labels, so `status`, `logs`
+and `down` are thin wrappers over `docker ps` / `logs` / `rm -f`, and a crash or
+reboot leaves nothing to reconcile. `up --restart` sets `unless-stopped` so the
+container reconnects itself.
+
+### The web daemon (optional)
+
+A dependency-free Go binary (`web/`) that **reconciles**, never owns: it reads
+the same YAML (via `yq -o=json`, never sourcing it) and live `docker ps/stats/
+logs`, streams them to the panel over SSE (with a `/state` + `/evlog` polling
+fallback for proxies that buffer SSE), and turns panel clicks into the same CLI
+verbs. Config edits go through `yq -i` with values passed **only** as environment
+variables — so a crafted value can't inject yq/shell syntax — and never touch the
+credential keys. It binds loopback with a token by default; `--no-auth` is for a
+trusted private bind (e.g. a tailnet IP), still behind a Host-header /
+cross-site / JSON-only guard.
 
 ## Security notes
 
