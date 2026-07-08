@@ -871,6 +871,22 @@ function layout() {
       tnodes.push(tn);
     });
 
+    // Cross-tunnel jump: this ssh tunnel reaches its targets by riding another
+    // tunnel's published forward (e.g. an ssh -L through that tunnel's host).
+    // Draw its chain through that jump-off host, labelled "via <tunnel>", so it
+    // reads as one hop past a host the *other* tunnel exposes.
+    if (t.jump && t.jump.host) {
+      const hx = xCont + (xTarget - xCont) * 0.5;
+      ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+      const w = Math.max(112 * z, ctx.measureText(t.jump.host).width + 26 * z);
+      const hn = { kind: "hop", t, x: hx, y: cy, w, h: 44 * z,
+        label: t.jump.host, sub: "jump · via " + t.jump.tun, role: "jump" };
+      nodes.push(hn);
+      edges.push({ kind: "subtrunk", from: cont, to: hn, t });
+      tnodes.forEach((tn) => edges.push({ kind: "leg", from: hn, to: tn, t }));
+      return; // fully wired through the jump-off host
+    }
+
     // Multi-hop ssh: draw the ProxyJump chain as intermediate nodes between the
     // container and its hosts —  cont → jump1 → … → landing(SSH_HOST) → hosts.
     // The forwards resolve from the landing host, so the last node fans out.
@@ -2071,6 +2087,7 @@ function applyState(list) {
       socks: s.socks || null, restart: !!s.restart, totp: !!s.totp,
       proto: s.proto || "", server: s.server || "",
       sshHost: s.sshHost || "", user: s.user || "", sshJump: s.sshJump || [],
+      jump: s.jump || null,
       hostNotes: s.hostNotes || {}, hostTags: s.hostTags || {},
       subnetNotes: s.subnetNotes || {}, subnetTags: s.subnetTags || {},
       container: "tf-" + s.id,

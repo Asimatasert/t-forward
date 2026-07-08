@@ -242,6 +242,13 @@ func (d *Docker) tunnelFromConf(name string) Tunnel {
 		if t.User == "" {
 			t.User = c.SSH.User
 		}
+		if c.SSH.Host != "" {
+			port := c.SSH.Port
+			if port == 0 {
+				port = 22
+			}
+			t.sshEndpoint = c.SSH.Host + ":" + strconv.Itoa(port)
+		}
 		for _, hop := range c.SSH.Jump {
 			if tok := hop.token(); tok != "" {
 				t.SSHJump = append(t.SSHJump, tok)

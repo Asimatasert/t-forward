@@ -49,6 +49,13 @@ func serviceForPort(port string) string {
 }
 
 // Tunnel is the read-only view of a configured and/or running tunnel.
+// JumpInfo names the tunnel a jumped ssh tunnel rides through and the jump-off
+// host (the remote of that tunnel's forward this one dials).
+type JumpInfo struct {
+	Tun  string `json:"tun"`  // the tunnel whose forward this one rides
+	Host string `json:"host"` // jump-off host (the forward's remote IP)
+}
+
 type Tunnel struct {
 	ID       string    `json:"id"`
 	Type     string    `json:"type"`
@@ -66,6 +73,13 @@ type Tunnel struct {
 	User    string `json:"user"`
 	// ordered ProxyJump hops (from ssh.jump) the ssh tunnel chains through
 	SSHJump []string `json:"sshJump,omitempty"`
+	// sshEndpoint is "host:port" this ssh tunnel dials (unexported; used by
+	// State to detect when it rides another tunnel's published forward).
+	sshEndpoint string
+	// Jump is set when this ssh tunnel's endpoint matches another tunnel's
+	// published forward — i.e. it reaches its target BY jumping through that
+	// tunnel's host. The panel roots this tunnel's chain at that host.
+	Jump *JumpInfo `json:"jump,omitempty"`
 	// optional user name per remote host, e.g. {"10.0.0.5":"Production DB"}
 	HostNotes map[string]string `json:"hostNotes"`
 	// optional per-host tags (from each host's tags list)
@@ -309,6 +323,30 @@ func (d *Docker) State() []Tunnel {
 		res = append(res, *t)
 	}
 	sort.Slice(res, func(i, j int) bool { return res[i].ID < res[j].ID })
+
+	// Detect jump tunnels: an ssh tunnel whose endpoint (host:port) is another
+	// tunnel's published forward reaches its targets BY jumping through that
+	// tunnel's host. Index every forward's published local addr -> {tun, remote
+	// host}, then match each ssh tunnel's endpoint against it.
+	type fwdSrc struct{ tun, host string }
+	idx := map[string]fwdSrc{}
+	for i := range res {
+		for _, f := range res[i].Forwards {
+			rh := f.Remote
+			if j := strings.IndexByte(rh, ':'); j >= 0 {
+				rh = rh[:j]
+			}
+			idx[f.Local] = fwdSrc{tun: res[i].ID, host: rh}
+		}
+	}
+	for i := range res {
+		if res[i].Type != "ssh" || res[i].sshEndpoint == "" {
+			continue
+		}
+		if src, ok := idx[res[i].sshEndpoint]; ok && src.tun != res[i].ID {
+			res[i].Jump = &JumpInfo{Tun: src.tun, Host: src.host}
+		}
+	}
 	return res
 }
 
