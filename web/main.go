@@ -108,6 +108,7 @@ func main() {
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, dock.State())
 	})
+	mux.HandleFunc("/layout", acts.handleLayout)
 	mux.HandleFunc("/up", acts.handleUp)
 	mux.HandleFunc("/down", acts.handleDown)
 	mux.HandleFunc("/code", acts.handleCode)

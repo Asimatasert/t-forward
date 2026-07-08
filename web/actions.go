@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -132,6 +134,47 @@ func exitCode(err error) int {
 		return ee.ExitCode()
 	}
 	return -1
+}
+
+// handleLayout stores/serves the panel's hand-arranged node positions so a
+// layout dragged on one machine shows the same on every other. GET returns the
+// saved JSON ({} if none); POST replaces it (atomic write, mode 600). It is not
+// per-tunnel config, just a UI blob, so it lives beside the confs.
+func (a *Actions) handleLayout(w http.ResponseWriter, r *http.Request) {
+	// beside the config tree, NOT inside conf.d (which is only tunnel *.yaml)
+	path := filepath.Join(filepath.Dir(a.docker.confDir), "panel-layout.json")
+	switch r.Method {
+	case http.MethodGet:
+		b, err := os.ReadFile(path)
+		if err != nil {
+			b = []byte("{}")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB cap
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "read"})
+			return
+		}
+		var v any
+		if json.Unmarshal(body, &v) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+			return
+		}
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, body, 0o600); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write"})
+			return
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "rename"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleDown: POST /down {name|"all"}

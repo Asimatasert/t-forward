@@ -147,6 +147,23 @@
   }
   .map-legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
   @media (max-width: 700px) { .map-legend { display: none; } }
+  .zoomctl {
+    position: absolute; bottom: 14px; right: 14px; z-index: 5;
+    display: flex; gap: 1px;
+    background: rgba(16,20,26,0.9);
+    border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
+    font-family: var(--mono);
+  }
+  .zoomctl button {
+    background: transparent; border: 0; color: var(--dim);
+    font-family: var(--mono); font-size: 14px; line-height: 1;
+    width: 30px; height: 28px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .zoomctl button:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+  .zoomctl button:focus-visible { outline: 2px solid var(--copper); outline-offset: -2px; }
+  #zoom-pct { width: 46px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #zoom-fit { width: 34px; font-size: 11px; letter-spacing: .04em; }
   .mapctl {
     position: absolute; bottom: 12px; right: 12px;
     display: flex; flex-direction: column; gap: 4px; z-index: 3;
@@ -416,6 +433,14 @@
         <span><span class="sw" style="background:var(--tx)"></span>TX →</span>
         <span><span class="sw" style="background:var(--rx)"></span>← RX</span>
         <span><span class="sw" style="background:var(--warn)"></span>handshake</span>
+      </div>
+      <div class="zoomctl" id="zoomctl" aria-label="Zoom controls">
+        <button id="lock-toggle" title="Lock box positions">🔓</button>
+        <button id="zoom-out" title="Zoom out (scroll ↓)">−</button>
+        <button id="zoom-pct" title="Reset zoom &amp; recenter">100%</button>
+        <button id="zoom-in" title="Zoom in (scroll ↑)">+</button>
+        <button id="zoom-fit" title="Fit the whole map">fit</button>
+        <button id="zoom-reset" title="Reset boxes to their auto positions">⟲</button>
       </div>
       <div class="tagbar" id="tagbar" aria-label="Tag filters"></div>
     </div>
@@ -701,8 +726,10 @@ const DPR = Math.min(2, window.devicePixelRatio || 1);
 // viewport — we render just the window into the scene (culling off-screen
 // nodes), so a 100+ node scene doesn't create an enormous, janky canvas layer.
 function sizeCanvas() {
-  mapSizer.style.width = G.W + "px";
-  mapSizer.style.height = G.H + "px";
+  // the scroll sizer is the scene scaled by the camera zoom, so native
+  // scrollbars span the zoomed scene
+  mapSizer.style.width = (G.W * cam.z) + "px";
+  mapSizer.style.height = (G.H * cam.z) + "px";
   const vw = Math.max(1, mapScroll.clientWidth), vh = Math.max(1, mapScroll.clientHeight);
   if (canvas.width !== Math.round(vw * DPR) || canvas.height !== Math.round(vh * DPR)) {
     canvas.width = Math.round(vw * DPR);
@@ -714,6 +741,65 @@ function sizeCanvas() {
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let G = { nodes: [], edges: [], W: 900, H: 600, z: 1 };
+// camera zoom for the map (scroll position on mapScroll does the panning). The
+// scene is laid out at logical coords; cam.z scales the rendered output and the
+// scroll sizer, so native scrollbars keep working at any zoom.
+const cam = { z: 1 };
+const MIN_Z = 0.35, MAX_Z = 2.6;
+function setZoomLabel() {
+  const el = document.getElementById("zoom-pct");
+  if (el) el.textContent = Math.round(cam.z * 100) + "%";
+}
+
+// user-dragged node positions, persisted so a hand-arranged map survives reload.
+// keyed by a stable node identity (tunnel + kind + host/cidr), NOT screen coords.
+let savedPos = {};
+try { savedPos = JSON.parse(localStorage.getItem("tf.nodePos") || "{}") || {}; } catch (e) { savedPos = {}; }
+// when locked, boxes can't be dragged (guards against accidental moves); persisted
+let mapLocked = localStorage.getItem("tf.mapLocked") === "1";
+function nodeKey(n) {
+  if (n.kind === "you") return "you";
+  const tid = n.t && n.t.id;
+  if (!tid) return "";
+  if (n.kind === "cont") return tid + "|cont";
+  if (n.kind === "target") return tid + "|host|" + n.ip;
+  if (n.kind === "subnet") return tid + "|net|" + n.cidr;
+  if (n.kind === "hop") return tid + "|hop|" + n.label;
+  return "";
+}
+function draggableNode(n) {
+  return n.kind === "you" || n.kind === "cont" || n.kind === "target" ||
+    n.kind === "subnet" || n.kind === "hop";
+}
+function saveNodePos(n) {
+  const k = nodeKey(n);
+  if (!k) return;
+  savedPos[k] = { x: Math.round(n.x), y: Math.round(n.y) };
+  persistLayout();
+}
+// persist the arrangement: localStorage for instant/offline, plus the server so
+// the layout is SHARED across machines (debounced POST /layout).
+let layoutSaveTimer = 0;
+function persistLayout() {
+  try { localStorage.setItem("tf.nodePos", JSON.stringify(savedPos)); } catch (e) {}
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(() => {
+    fetch(withTok("/layout"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify(savedPos),
+    }).catch(() => {});
+  }, 400);
+}
+// apply saved overrides to a freshly-laid-out node set, and grow the scene so a
+// node dragged past the original bounds stays reachable
+function applySavedPositions(nodes) {
+  nodes.forEach((n) => { const k = nodeKey(n); if (k && savedPos[k]) { n.x = savedPos[k].x; n.y = savedPos[k].y; } });
+  nodes.forEach((n) => {
+    G.W = Math.max(G.W, n.x + n.w / 2 + 60);
+    G.H = Math.max(G.H, n.y + n.h / 2 + 60);
+  });
+}
 
 // The map auto-arranges itself and scrolls; you just click a box to inspect it.
 // Hit test in plain canvas coordinates (no pan/zoom transform).
@@ -758,9 +844,61 @@ function subnetFor(t, ip) {
   return ipToInt(ip) === null ? "" : ip.split(".").slice(0, 3).join(".") + ".0/24";
 }
 
+// natural height of a host's target box (ip + optional name + one line per port)
+function targetBoxH(t, host, off) {
+  const nf = off ? 1 : Math.max(1, (t.forwards || []).filter((f) => f.remote.split(":")[0] === host).length);
+  const name = (t.hostNotes && t.hostNotes[host]) ? 1 : 0;
+  return Math.max(44, 12 + (1 + name + nf) * 15 + 4);
+}
+// Build a target-host node (kind:"target") with its stacked per-port lines
+// (reachability dots + notes), name, host reachability, and measured width.
+// Shared by a tunnel's own hosts and by hosts reached one jump deeper.
+function makeTargetNode(t, host, x, cyt, bh, off, z) {
+  const fwds = t.forwards.filter((f) => f.remote.split(":")[0] === host);
+  const lines = off ? ["- - - -"] : fwds.map((f) => {
+    const lp = (f.local || "").split(":").pop();
+    const svc = f.service ? `(${f.service}) ` : "";
+    const pr = (t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
+    return { note: f.note || "", text: `${svc}:${f.remote.split(":")[1]} ← ${lp}`, reach: pr };
+  });
+  const name = (t.hostNotes && t.hostNotes[host]) ? t.hostNotes[host] : "";
+  ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
+  let maxW = Math.max(ctx.measureText(name).width, ctx.measureText(host).width);
+  ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
+  for (const l of lines) maxW = Math.max(maxW, ctx.measureText(lineStr(l)).width);
+  if (!off) maxW += 11 * z;
+  const w = Math.max(150 * z, maxW + 26 * z);
+  const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
+  return { kind: "target", t, x, y: cyt, w, h: bh, ip: host, name, lines, off, reach };
+}
+// Build a virtual-subnet capsule node between two columns.
+function makeSubnetNode(t, cidr, x, y, z, note, info, off) {
+  ctx.font = `600 ${Math.max(9.5, 11.5 * z)}px ${MONO}`;
+  let sw = ctx.measureText(cidr).width;
+  ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
+  sw = Math.max(sw, ctx.measureText(info || "").width, note ? ctx.measureText(note).width : 0);
+  return { kind: "subnet", t, cidr, x, y, w: Math.max(150 * z, sw + 26 * z),
+    h: (note ? 62 : 50) * z, ip: "", note: note || "", info: info || "", off: !!off };
+}
+
 function layout() {
   if (view === "lan") { layoutScan(); drawStatic(); return; }
   const vis = visibleTunnels();
+  // Jump children: a visible tunnel whose t.jump targets another VISIBLE tunnel
+  // is not drawn as its own row — its hosts hang off the parent's jump-off host
+  // node, one virtual subnet deeper. If the parent isn't visible (e.g. filtered
+  // to the ssh tab), it falls back to its own row + the standalone jump node.
+  const visIds = new Set(vis.map((t) => t.id));
+  const jumpKids = {};   // "parentId|jumpHost" -> [child tunnel …]
+  const jumpKidIds = new Set();
+  vis.forEach((ct) => {
+    if (ct.jump && ct.jump.host && ct.jump.tun !== ct.id && visIds.has(ct.jump.tun)) {
+      const k = ct.jump.tun + "|" + ct.jump.host;
+      (jumpKids[k] || (jumpKids[k] = [])).push(ct);
+      jumpKidIds.add(ct.id);
+    }
+  });
+  const anyJump = jumpKidIds.size > 0;
   const W = Math.max(760, mapWrap.clientWidth);
   const availH = Math.max(300, mapWrap.clientHeight);
 
@@ -769,17 +907,23 @@ function layout() {
      (name + ip + one line per forward), and the row is tall enough to stack
      all of a tunnel's target boxes without overlap. */
   const TGAP = 14;
-  const rowsMeta = vis.map((t) => {
+  const visRows = vis.filter((t) => !jumpKidIds.has(t.id));
+  const rowsMeta = visRows.map((t) => {
     const off = t.state === "off";
     const targets = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))];
-    const tgtH = targets.map((host) => {
-      const nf = off ? 1 : Math.max(1, (t.forwards || []).filter((f) => f.remote.split(":")[0] === host).length);
-      const name = (t.hostNotes && t.hostNotes[host]) ? 1 : 0;
-      const rows2 = 1 + name + nf;             // ip (+name) + port lines
-      return Math.max(44, 12 + rows2 * 15 + 4);
+    const tgtH = targets.map((host) => targetBoxH(t, host, off)); // natural box heights
+    // extra row height reserved for hosts reached one jump past a host here, so
+    // the deeper column's boxes don't spill into the next row
+    let extra = 0;
+    targets.forEach((host) => {
+      (jumpKids[t.id + "|" + host] || []).forEach((ck) => {
+        const ko = ck.state === "off";
+        [...new Set((ck.forwards || []).map((f) => f.remote.split(":")[0]))]
+          .forEach((kh) => { extra += targetBoxH(ck, kh, ko) + TGAP; });
+      });
     });
     const contentH = tgtH.reduce((s, h) => s + h, 0) + Math.max(0, targets.length - 1) * TGAP;
-    return { t, off, targets, tgtH, h: Math.max(74, contentH + 24) };
+    return { t, off, targets, tgtH, h: Math.max(74, contentH + 24 + extra) };
   });
   // full-size at z=1; the map-wrap scrolls if the content is taller than the view
   const z = 1;
@@ -799,10 +943,14 @@ function layout() {
   // subnetFor). When nothing has a subnet we reclaim that space so the wires
   // don't stretch across an empty column.
   const anySub = rows.some((r) => r.targets.some((ip) => subnetFor(r.t, ip)));
-  const xYou = Math.max(130, W * 0.12);
-  const xCont = anySub ? W * 0.33 : W * 0.44;
-  const xSubnet = W * 0.575;
-  const xTarget = W - Math.max(140, W * 0.135);
+  const xYou = Math.max(130, W * (anyJump ? 0.10 : 0.12));
+  // when a jump adds two deeper columns, compress the base columns leftward so
+  // the whole chain still fits the width
+  const xCont = anyJump ? W * 0.24 : (anySub ? W * 0.33 : W * 0.44);
+  const xSubnet = anyJump ? W * 0.44 : W * 0.575;
+  const xTarget = anyJump ? W * 0.63 : W - Math.max(140, W * 0.135);
+  const xSubnet2 = W * 0.80;   // deeper virtual subnet (across the jump)
+  const xTarget2 = W - Math.max(120, W * 0.09); // jumped host
   const nodes = [], edges = [];
 
   const youY = Math.min(H / 2, Math.max(120 * z, y / 2));
@@ -845,30 +993,44 @@ function layout() {
       const bh = r.tgtH[i] * z;
       const cyt = ty + bh / 2;
       ty += bh + TGAP * z;
-      const fwds = t.forwards.filter((f) => f.remote.split(":")[0] === host);
-      // one line per port, stacked; off tunnels show a "- - -" placeholder.
-      // A forward's note renders as a copper prefix ("Test · (http) :8080 ← 8823"),
-      // so lines are {note, text} objects; devices keep plain strings.
-      const lines = off ? ["- - - -"] : fwds.map((f) => {
-        const lp = (f.local || "").split(":").pop();
-        const svc = f.service ? `(${f.service}) ` : "";
-        const pr = (t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
-        return { note: f.note || "", text: `${svc}:${f.remote.split(":")[1]} ← ${lp}`, reach: pr };
-      });
-      // host NAME (from note) on top, then the IP, then the ports
-      const name = (t.hostNotes && t.hostNotes[host]) ? t.hostNotes[host] : "";
-      // width: measure the actual longest text line at the drawn font sizes
-      ctx.font = `600 ${Math.max(9.5, 11 * z)}px ${MONO}`;
-      let maxW = Math.max(ctx.measureText(name).width, ctx.measureText(host).width);
-      ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
-      for (const l of lines) maxW = Math.max(maxW, ctx.measureText(lineStr(l)).width);
-      if (!off) maxW += 11 * z;   // left room for the per-port status dot
-      const w = Math.max(150 * z, maxW + 26 * z);
-      const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
-      const tn = { kind: "target", t, x: xTarget, y: cyt, w, h: bh,
-        ip: host, name, lines, off, reach };
+      const tn = makeTargetNode(t, host, xTarget, cyt, bh, off, z);
       nodes.push(tn);
       tnodes.push(tn);
+
+      // Jumped hosts: any tunnel that reaches its targets by jumping through
+      // THIS host continues the chain one virtual subnet deeper —
+      //   host ─ subnet ─ jumped-host  — at the same altitude, stacked if many.
+      const kids = jumpKids[t.id + "|" + host] || [];
+      if (kids.length) {
+        const kidBoxes = [];
+        kids.forEach((ck) => {
+          const ko = ck.state === "off";
+          [...new Set((ck.forwards || []).map((f) => f.remote.split(":")[0]))]
+            .forEach((kh) => kidBoxes.push({ ck, kh, ko, h: targetBoxH(ck, kh, ko) * z }));
+        });
+        const totalKidH = kidBoxes.reduce((s, b) => s + b.h, 0) + Math.max(0, kidBoxes.length - 1) * TGAP * z;
+        let ky = cyt - totalKidH / 2;
+        kidBoxes.forEach((b) => {
+          const kcy = ky + b.h / 2;
+          ky += b.h + TGAP * z;
+          const kn = makeTargetNode(b.ck, b.kh, xTarget2, kcy, b.h, b.ko, z);
+          nodes.push(kn);
+          // the subnet on the far side of the jump — synthesize a /24 from the
+          // jumped host IP even for ssh tunnels (subnetFor only does this for vpn)
+          const kcidr = subnetFor(b.ck, b.kh) ||
+            (ipToInt(b.kh) !== null ? b.kh.split(".").slice(0, 3).join(".") + ".0/24" : "");
+          if (kcidr) {
+            const note = (b.ck.subnetNotes && b.ck.subnetNotes[kcidr]) || "via jump";
+            const sn2 = makeSubnetNode(b.ck, kcidr, xSubnet2, (cyt + kcy) / 2, z,
+              note, "via " + b.ck.jump.tun, b.ko);
+            nodes.push(sn2);
+            edges.push({ kind: "subtrunk", from: tn, to: sn2, t: b.ck });
+            edges.push({ kind: "leg", from: sn2, to: kn, t: b.ck });
+          } else {
+            edges.push({ kind: "leg", from: tn, to: kn, t: b.ck });
+          }
+        });
+      }
     });
 
     // Cross-tunnel jump: this ssh tunnel reaches its targets by riding another
@@ -940,6 +1102,7 @@ function layout() {
 
   // scroll area = full scene; canvas = viewport only (see sizeCanvas)
   G = { nodes, edges, W, H, z };
+  applySavedPositions(nodes); // hand-arranged overrides (may grow G.W/G.H)
   sizeCanvas();
 }
 
@@ -1252,10 +1415,13 @@ function draw(ts) {
   // render only the visible window into the scene (canvas is viewport-sized)
   const ox = mapScroll.scrollLeft, oy = mapScroll.scrollTop;
   const vw = mapScroll.clientWidth, vh = mapScroll.clientHeight;
+  const s = cam.z;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, vw, vh);
   ctx.translate(-ox, -oy);
-  const left = ox, right = ox + vw, top = oy, bot = oy + vh;
+  ctx.scale(s, s);
+  // visible window in SCENE coords (nodes/edges are laid out in scene coords)
+  const left = ox / s, right = (ox + vw) / s, top = oy / s, bot = (oy + vh) / s;
   ctx.strokeStyle = "rgba(42,51,64,0.28)";
   ctx.lineWidth = 1;
   for (let gx = Math.floor(left / 90) * 90; gx < right; gx += 90) {
@@ -1288,7 +1454,8 @@ function drawStatic() { if (view === "lan") draw(clock); }
 // the canvas is viewport-sized and sticky; add the scroll offset to get scene coords
 function canvasXY(ev) {
   const r = canvas.getBoundingClientRect();
-  return { x: ev.clientX - r.left + mapScroll.scrollLeft, y: ev.clientY - r.top + mapScroll.scrollTop };
+  return { x: (ev.clientX - r.left + mapScroll.scrollLeft) / cam.z,
+           y: (ev.clientY - r.top + mapScroll.scrollTop) / cam.z };
 }
 // the static LAN canvas must repaint as you scroll (the tunnel canvas repaints
 // every frame anyway); rAF-throttled so fast scrolls stay smooth
@@ -1297,16 +1464,105 @@ mapScroll.addEventListener("scroll", () => {
   if (view !== "lan" || scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => { scrollRAF = 0; draw(clock); });
 });
-// simple: click a box to inspect it; the map auto-arranges and scrolls on its own
-canvas.addEventListener("click", (ev) => {
+// drag anywhere to pan (moves the native scroll offset); a click without drag
+// selects the node under the cursor; wheel / buttons zoom toward a point.
+let drag = null;
+canvas.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0) return;
   const p = canvasXY(ev);
   const n = nodeAt(p.x, p.y);
-  if (n) selectNode(n);
+  if (n && draggableNode(n) && !mapLocked) {
+    // move the box; remember the grab offset so it doesn't jump to the cursor
+    drag = { mode: "node", node: n, gx: p.x - n.x, gy: p.y - n.y, cx: ev.clientX, cy: ev.clientY, moved: false };
+  } else {
+    drag = { mode: "pan", cx: ev.clientX, cy: ev.clientY, sl: mapScroll.scrollLeft, st: mapScroll.scrollTop, moved: false };
+  }
+  try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
 });
-canvas.addEventListener("mousemove", (ev) => {
-  const p = canvasXY(ev);
-  canvas.style.cursor = nodeAt(p.x, p.y) ? "pointer" : "default";
+canvas.addEventListener("pointermove", (ev) => {
+  if (drag) {
+    const dx = ev.clientX - drag.cx, dy = ev.clientY - drag.cy;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved && drag.mode === "node") {
+      const p = canvasXY(ev);
+      drag.node.x = p.x - drag.gx;
+      drag.node.y = p.y - drag.gy;
+      canvas.style.cursor = "grabbing";
+    } else if (drag.moved) {
+      mapScroll.scrollLeft = drag.sl - dx;
+      mapScroll.scrollTop = drag.st - dy;
+      canvas.style.cursor = "grabbing";
+    }
+    return;
+  }
+  const hp = canvasXY(ev);
+  const n = nodeAt(hp.x, hp.y);
+  canvas.style.cursor = n ? ((draggableNode(n) && !mapLocked) ? "grab" : "pointer") : "grab";
 });
+canvas.addEventListener("pointerup", (ev) => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  try { canvas.releasePointerCapture(ev.pointerId); } catch (e) {}
+  canvas.style.cursor = "grab";
+  if (d.mode === "node") {
+    if (d.moved) saveNodePos(d.node);   // persist the new position
+    else selectNode(d.node);            // a click (no drag) inspects it
+  } else if (!d.moved) {
+    const p = canvasXY(ev);
+    const n = nodeAt(p.x, p.y);
+    if (n) selectNode(n);
+  }
+});
+canvas.addEventListener("pointercancel", () => { drag = null; });
+
+// zoom toward a viewport point (cx,cy), keeping that scene point under it
+function zoomAt(nz, cx, cy) {
+  nz = Math.max(MIN_Z, Math.min(MAX_Z, nz));
+  if (Math.abs(nz - cam.z) < 1e-4) return;
+  const sx = (mapScroll.scrollLeft + cx) / cam.z;
+  const sy = (mapScroll.scrollTop + cy) / cam.z;
+  cam.z = nz;
+  sizeCanvas();
+  mapScroll.scrollLeft = sx * nz - cx;
+  mapScroll.scrollTop = sy * nz - cy;
+  setZoomLabel();
+}
+mapScroll.addEventListener("wheel", (ev) => {
+  if (view === "lan") return;
+  ev.preventDefault();
+  const r = mapScroll.getBoundingClientRect();
+  zoomAt(cam.z * Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
+}, { passive: false });
+function zoomCentered(nz) { zoomAt(nz, mapScroll.clientWidth / 2, mapScroll.clientHeight / 2); }
+document.getElementById("zoom-in").addEventListener("click", () => zoomCentered(cam.z * 1.25));
+document.getElementById("zoom-out").addEventListener("click", () => zoomCentered(cam.z / 1.25));
+document.getElementById("zoom-pct").addEventListener("click", () => {
+  cam.z = 1; sizeCanvas(); mapScroll.scrollLeft = 0; mapScroll.scrollTop = 0; setZoomLabel();
+});
+document.getElementById("zoom-fit").addEventListener("click", () => {
+  cam.z = Math.max(MIN_Z, Math.min(1, Math.min(mapScroll.clientWidth / G.W, mapScroll.clientHeight / G.H)));
+  sizeCanvas(); mapScroll.scrollLeft = 0; mapScroll.scrollTop = 0; setZoomLabel();
+});
+document.getElementById("zoom-reset").addEventListener("click", () => {
+  savedPos = {};
+  persistLayout();
+  layout();
+});
+function setLockUI() {
+  const b = document.getElementById("lock-toggle");
+  if (!b) return;
+  b.textContent = mapLocked ? "🔒" : "🔓";
+  b.title = mapLocked ? "Unlock box positions (drag to rearrange)" : "Lock box positions (prevent accidental moves)";
+  b.classList.toggle("on", mapLocked);
+}
+document.getElementById("lock-toggle").addEventListener("click", () => {
+  mapLocked = !mapLocked;
+  try { localStorage.setItem("tf.mapLocked", mapLocked ? "1" : "0"); } catch (e) {}
+  setLockUI();
+});
+setLockUI();
+setZoomLabel();
+canvas.style.cursor = "grab";
 
 /* ---- resizable right panel + events drawer (persisted) ---- */
 (function () {
@@ -2218,6 +2474,12 @@ renderTabs();
 renderTagbar();
 layout();
 renderPanel();
+// shared hand-arranged layout from the server (source of truth across machines);
+// falls back to whatever localStorage already seeded if the request fails
+fetch(withTok("/layout"), { headers: { "X-Token": TOKEN } })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((d) => { if (d && typeof d === "object" && Object.keys(d).length) { savedPos = d; if (view === "map") layout(); } })
+  .catch(() => {});
 connectSSE();
 pullState();   // populate immediately over HTTP, independent of the SSE stream
 // fall back to polling whenever SSE hasn't delivered a state in a while (stream
