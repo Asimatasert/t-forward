@@ -535,6 +535,18 @@ func parseBytes(s string) (float64, bool) {
 // ---------------------------------------------------------------- log events
 
 // classify mirrors the CLI's tag_events keyword rules.
+// noisyLogLine reports whether a container log line is high-frequency socat
+// per-transfer noise (`socat[..] N write(6, .., 132) completed`, and the read
+// variant). On a busy forward socat emits these hundreds of times a second and
+// they carry no operator value — dropping them keeps the panel/SSE responsive.
+// The useful "N accepting connection from ..." lines do NOT match and are kept.
+func noisyLogLine(msg string) bool {
+	if !strings.Contains(msg, "socat[") || !strings.Contains(msg, "completed") {
+		return false
+	}
+	return strings.Contains(msg, " write(") || strings.Contains(msg, " read(")
+}
+
 func classify(line string) string {
 	l := line
 	switch {
@@ -588,6 +600,9 @@ func (d *Docker) tailLogs(ctx context.Context, containerName, tun string) {
 			continue
 		}
 		ts, msg := splitTimestamp(raw)
+		if noisyLogLine(msg) {
+			continue // socat per-transfer spam — would flood the panel/SSE
+		}
 		d.hub.Broadcast("event", map[string]any{
 			"ts":    ts,
 			"level": classify(msg),
