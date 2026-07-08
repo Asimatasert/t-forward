@@ -82,6 +82,7 @@ type Tunnel struct {
 	TxRate      int64             `json:"txRate,omitempty"`
 	RxRate      int64             `json:"rxRate,omitempty"`
 	HostUp      map[string]bool   `json:"hostUp,omitempty"`
+	PortUp      map[string]bool   `json:"portUp,omitempty"` // per-forward reachability, keyed "ip:port"
 	TunIP       string            `json:"tunIP,omitempty"`
 	TunSubnet   string            `json:"tunSubnet,omitempty"`
 	HostSubnets map[string]string `json:"hostSubnets,omitempty"`
@@ -93,6 +94,7 @@ type Tunnel struct {
 type liveData struct {
 	txRate, rxRate   int64
 	hostUp           map[string]bool
+	portUp           map[string]bool
 	tunIP, tunSubnet string
 	hostSubnets      map[string]string
 	clients          []Client
@@ -299,6 +301,7 @@ func (d *Docker) State() []Tunnel {
 			if ld := d.live[t.ID]; ld != nil {
 				t.TxRate, t.RxRate = ld.txRate, ld.rxRate
 				t.HostUp, t.TunIP, t.TunSubnet = ld.hostUp, ld.tunIP, ld.tunSubnet
+				t.PortUp = ld.portUp
 				t.HostSubnets, t.Clients = ld.hostSubnets, ld.clients
 			}
 			d.mu.Unlock()
@@ -1160,21 +1163,38 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 				}
 				hostPorts[ip] = append(hostPorts[ip], port)
 			}
+			// Probe EVERY port (per-port dots in the panel), the ports of one host
+			// concurrently so a host with several firewalled ports still costs only
+			// ~one timeout. hostUp[ip] is the OR — the host is up if any port answers.
 			up := map[string]bool{}
+			portUp := map[string]bool{}
+			var pmu sync.Mutex
 			for _, ip := range order {
-				reachable := false
+				up[ip] = false
+				var wg sync.WaitGroup
 				for _, port := range hostPorts[ip] {
-					if reachInContainer(ctx, cname, ip, port) {
-						reachable = true
-						break // first port that answers -> host is reachable
-					}
+					wg.Add(1)
+					go func(ip, port string) {
+						defer wg.Done()
+						ok := reachInContainer(ctx, cname, ip, port)
+						key := ip
+						if port != "" {
+							key = ip + ":" + port
+						}
+						pmu.Lock()
+						portUp[key] = ok
+						if ok {
+							up[ip] = true
+						}
+						pmu.Unlock()
+					}(ip, port)
 				}
-				up[ip] = reachable
+				wg.Wait()
 			}
 			if len(up) > 0 {
-				upC := up
-				d.updateLive(tn.ID, func(ld *liveData) { ld.hostUp = upC })
-				d.hub.Broadcast("hosts", map[string]any{"tun": tn.ID, "up": up})
+				upC, puC := up, portUp
+				d.updateLive(tn.ID, func(ld *liveData) { ld.hostUp = upC; ld.portUp = puC })
+				d.hub.Broadcast("hosts", map[string]any{"tun": tn.ID, "up": up, "portUp": portUp})
 			}
 			// our IP on the VPN (tun0) and which target hosts share our subnet
 			// (same subnet -> they can talk to us / each other directly)

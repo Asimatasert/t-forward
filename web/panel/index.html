@@ -852,7 +852,8 @@ function layout() {
       const lines = off ? ["- - - -"] : fwds.map((f) => {
         const lp = (f.local || "").split(":").pop();
         const svc = f.service ? `(${f.service}) ` : "";
-        return { note: f.note || "", text: `${svc}:${f.remote.split(":")[1]} ← ${lp}` };
+        const pr = (t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
+        return { note: f.note || "", text: `${svc}:${f.remote.split(":")[1]} ← ${lp}`, reach: pr };
       });
       // host NAME (from note) on top, then the IP, then the ports
       const name = (t.hostNotes && t.hostNotes[host]) ? t.hostNotes[host] : "";
@@ -861,6 +862,7 @@ function layout() {
       let maxW = Math.max(ctx.measureText(name).width, ctx.measureText(host).width);
       ctx.font = `${Math.max(8.5, 10 * z)}px ${MONO}`;
       for (const l of lines) maxW = Math.max(maxW, ctx.measureText(lineStr(l)).width);
+      if (!off) maxW += 11 * z;   // left room for the per-port status dot
       const w = Math.max(150 * z, maxW + 26 * z);
       const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
       const tn = { kind: "target", t, x: xTarget, y: cyt, w, h: bh,
@@ -1140,6 +1142,8 @@ function drawNode(n) {
       ctx.fillText(n.ip, px, y + oy * z); oy += 15;
     }
     ctx.font = `${f2}px ${MONO}`;
+    const hasDot = n.lines.some((l) => l && typeof l === "object" && l.reach !== undefined);
+    const textX = hasDot ? px + 11 * z : px;   // room for a per-port status dot
     n.lines.forEach((ln, i) => {
       const ly = y + (oy + i * 14) * z;
       if (typeof ln === "string") {
@@ -1147,7 +1151,12 @@ function drawNode(n) {
         ctx.fillText(ln, px, ly);
         return;
       }
-      let lx = px;
+      // per-port reachability dot: green reachable / red blocked / gray unknown
+      if (ln.reach !== undefined) {
+        ctx.fillStyle = ln.reach === true ? T.ok : ln.reach === false ? T.danger : T.faint;
+        ctx.beginPath(); ctx.arc(px + 2.5 * z, ly + 4.5 * z, 2.6 * z, 0, 7); ctx.fill();
+      }
+      let lx = textX;
       if (ln.note) {                      // forward note: copper prefix
         ctx.fillStyle = T.copper;
         ctx.fillText(ln.note + " · ", lx, ly);
@@ -1613,8 +1622,12 @@ function renderHost(el, tunId, host) {
         const gidx = uri ? goVals.push(uri) - 1 : -1;
         const fidx = fwdEdits.push([f.remote, f.note || ""]) - 1;
         const fnote = f.note ? ` · <span style="color:var(--copper)">${esc(f.note)}</span>` : "";
+        const pr = (t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
+        const pc = pr === true ? "var(--ok)" : pr === false ? "var(--danger)" : "var(--faint)";
+        const pt = pr === true ? "reachable through the tunnel" : pr === false ? "blocked / no response through the tunnel" : "reachability unknown";
         return `
         <div class="port-row">
+          <span title="${pt}" style="color:${pc};font-size:11px">●</span>
           ${f.service ? `<span class="svc">(${esc(f.service)})</span>` : ""}
           <span>${esc(f.local)}</span><span class="arrow">→</span><span>:${esc(f.remote.split(":")[1])}${fnote}</span>
           <button class="copy" data-copy="${cidx}" title="${esc(connString(f))}">copy</button>
@@ -2069,6 +2082,7 @@ function applyState(list) {
     if (t.state === "on") {
       t.rate = { tx: Number(s.txRate) || 0, rx: Number(s.rxRate) || 0 };
       if (s.hostUp) t.hostUp = s.hostUp;
+      if (s.portUp) t.portUp = s.portUp;
       if (s.tunIP) t.tunIP = s.tunIP;
       if (s.tunSubnet) t.tunSubnet = s.tunSubnet;
       if (s.hostSubnets) t.hostSubnets = s.hostSubnets;
@@ -2151,7 +2165,7 @@ function connectSSE() {
     try {
       const d = JSON.parse(e.data);
       const t = tunnels.find((x) => x.id === d.tun);
-      if (t) t.hostUp = d.up || {};
+      if (t) { t.hostUp = d.up || {}; t.portUp = d.portUp || {}; }
     } catch {}
   });
   es.addEventListener("netinfo", (e) => {
