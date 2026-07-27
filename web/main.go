@@ -119,8 +119,11 @@ func main() {
 	mux.HandleFunc("/conf/", acts.privileged(acts.handleConf))
 	mux.HandleFunc("/scan", acts.handleScan)
 	mux.HandleFunc("/scan/rescan", acts.handleScanRescan)
-	mux.HandleFunc("/scan/forward", acts.handleScanForward)
-	mux.HandleFunc("/scan/device", acts.handleScanDevice)
+	// forward + device mutate config (write conf.d / devices.yaml, start a
+	// container), so they are privileged like /conf/ — otherwise the admin PIN
+	// only guards /conf/ while these do the more impactful writes ungated.
+	mux.HandleFunc("/scan/forward", acts.privileged(acts.handleScanForward))
+	mux.HandleFunc("/scan/device", acts.privileged(acts.handleScanDevice))
 
 	var handler http.Handler = mux
 	if !*noAuth {
