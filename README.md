@@ -1,8 +1,11 @@
 # t-forward
 
+[![CI](https://github.com/Asimatasert/t-forward/actions/workflows/ci.yml/badge.svg)](https://github.com/Asimatasert/t-forward/actions/workflows/ci.yml)
 [![Docker Hub](https://img.shields.io/docker/v/asimatasert/t-forward?label=docker%20hub&logo=docker)](https://hub.docker.com/r/asimatasert/t-forward)
 [![Image size](https://img.shields.io/docker/image-size/asimatasert/t-forward/latest?logo=docker&label=image)](https://hub.docker.com/r/asimatasert/t-forward/tags)
 [![Release](https://img.shields.io/github/v/release/Asimatasert/t-forward?logo=github)](https://github.com/Asimatasert/t-forward/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 **Docker-based tunnel & port-forward manager.** Define your VPNs / SSH jumps /
 relays as small YAML files, bring them up with one command (each in its own
@@ -347,6 +350,20 @@ cross-site / JSON-only guard.
   `.gitignore` excludes real config directories. Keep them out of version control.
 - Panel config edits are whitelisted and injection-safe, and never modify the
   password / servercert / totp_secret / ssh key.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+build, test, and open a PR. Good places to start:
+
+- [`good first issue`](https://github.com/Asimatasert/t-forward/labels/good%20first%20issue)
+  — small, self-contained tasks.
+- [`help wanted`](https://github.com/Asimatasert/t-forward/labels/help%20wanted)
+  — larger items on the roadmap.
+
+Have a question or an idea? Open a
+[Discussion](https://github.com/Asimatasert/t-forward/discussions). Found a
+security issue? See [SECURITY.md](SECURITY.md).
 
 ## License
 

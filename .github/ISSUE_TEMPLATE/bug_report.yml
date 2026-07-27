@@ -1,0 +1,57 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **redact any real IPs, hostnames, or
+        credentials** — use placeholders like `10.0.0.1` / `host.example`.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      options:
+        - CLI (t-forward)
+        - Tunnel container (vpn / ssh / local)
+        - Web panel / daemon
+        - LAN discovery (nmap)
+        - Docs / examples
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The command(s) you ran and a **redacted** config if relevant.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`t-forward version` (or the image / release tag)"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Host & Docker runtime
+      description: e.g. macOS 14 + OrbStack, Debian 12 + dockerd
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`t-forward events`, container logs, or daemon output — **redacted**."
+      render: shell

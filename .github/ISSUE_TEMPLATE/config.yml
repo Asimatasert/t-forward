@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea (Discussions)
+    url: https://github.com/Asimatasert/t-forward/discussions
+    about: For usage questions, setup help, or open-ended ideas — please use Discussions.
