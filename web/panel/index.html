@@ -709,8 +709,8 @@ function renderEvents() {
   }
   body.innerHTML = list.map((e) => `
     <div class="ev-row">
-      <span class="ts">${e.ts}</span>
-      <span class="lvl ${e.lvl}">${e.lvl.toUpperCase()}</span>
+      <span class="ts">${esc(e.ts)}</span>
+      <span class="lvl ${esc(e.lvl)}">${esc(e.lvl.toUpperCase())}</span>
       <span class="tun">${esc(e.tun)}</span>
       <span class="msg">${esc(e.msg)}</span>
     </div>`).join("");
@@ -961,11 +961,11 @@ function matchesQuery(t) {
   if ((t.tags || []).some((g) => g.toLowerCase().includes(q))) return true;
   const hosts = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))];
   if (hosts.some((h) =>
-    h.includes(q) ||
+    h.toLowerCase().includes(q) ||
     ((t.hostNotes || {})[h] || "").toLowerCase().includes(q) ||
     ((t.hostTags || {})[h] || []).some((g) => g.toLowerCase().includes(q)))) return true;
   if ((t.forwards || []).some((f) =>
-    (f.remote || "").includes(q) || (f.local || "").includes(q) ||
+    (f.remote || "").toLowerCase().includes(q) || (f.local || "").toLowerCase().includes(q) ||
     (f.service || "").toLowerCase().includes(q))) return true;
   return false;
 }
@@ -1780,6 +1780,25 @@ function treeToggle(id) {
 function treeSelTun(id) { selected = id; sel = { kind: "tunnel" }; renderPanel(); renderTree(); }
 function treeSelHost(id, host) { selected = id; sel = { kind: "host", tun: id, host }; renderPanel(); renderTree(); }
 function treeSelSubnet(id, cidr) { selected = id; sel = { kind: "subnet", tun: id, cidr }; renderPanel(); renderTree(); }
+// Delegated click handling for the tree. Rows carry data-* (act/tun/host/cidr)
+// rather than inline onclick handlers, so config-derived values (host ip, cidr)
+// never land in an executable attribute context — closest() picks the innermost
+// data-act, so a caret/up/down click doesn't also select its row.
+function wireTree() {
+  const el = document.getElementById("tree-wrap");
+  if (!el) return;
+  el.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-act]");
+    if (!t || !el.contains(t)) return;
+    const act = t.dataset.act, tun = t.dataset.tun;
+    if (act === "tun") treeSelTun(tun);
+    else if (act === "host") treeSelHost(tun, t.dataset.host);
+    else if (act === "subnet") treeSelSubnet(tun, t.dataset.cidr);
+    else if (act === "toggle") treeToggle(tun);
+    else if (act === "up") actUp(tun);
+    else if (act === "down") actDown(tun);
+  });
+}
 
 function treeRateStr(t) {
   return t.state === "on" && t.rate ? `↑${fmtRate(t.rate.tx)} ↓${fmtRate(t.rate.rx)}` : "";
@@ -1824,7 +1843,7 @@ function renderTree() {
           `:${esc(f.remote.split(":")[1] || "")} ← ${esc(lp)}` +
           `${f.note ? ` <span class="note">· ${esc(f.note)}</span>` : ""}</span></div>`;
       }).join("");
-      return `<div class="tr-row tr-host${hSel ? " sel" : ""}" onclick="treeSelHost('${esc(t.id)}','${esc(h)}')">` +
+      return `<div class="tr-row tr-host${hSel ? " sel" : ""}" data-act="host" data-tun="${esc(t.id)}" data-host="${esc(h)}">` +
         `<span class="tr-dot sm ${reach === true ? "on" : reach === false ? "failed" : ""}"></span>` +
         `<span class="ip">${esc(h)}</span>` +
         `${name ? `<span class="name">${esc(name)}</span>` : ""}` +
@@ -1836,7 +1855,7 @@ function renderTree() {
       const note = (t.subnetNotes && t.subnetNotes[cidr]) || "virtual";
       const ourIP = (!off && t.tunSubnet === cidr && t.tunIP) ? " · you " + t.tunIP : "";
       const sSel = sel.kind === "subnet" && sel.tun === t.id && sel.cidr === cidr;
-      return `<div class="tr-row tr-subnet${sSel ? " sel" : ""}" onclick="treeSelSubnet('${esc(t.id)}','${esc(cidr)}')">` +
+      return `<div class="tr-row tr-subnet${sSel ? " sel" : ""}" data-act="subnet" data-tun="${esc(t.id)}" data-cidr="${esc(cidr)}">` +
         `<span class="cidr">${esc(cidr)}</span><span class="lbl">${esc(note)}${esc(ourIP)}</span></div>` +
         `<div class="tr-kids">${bySub[cidr].map(hostHTML).join("")}</div>`;
     }).join("");
@@ -1848,8 +1867,8 @@ function renderTree() {
       via = "chain · " + [...t.sshJump, t.sshHost].filter(Boolean).map((x) => esc(x)).join(" → ");
 
     return `<div class="tree-tun${off ? " tree-off" : ""}">` +
-      `<div class="tr-row tr-tunrow${selTun ? " sel" : ""}" onclick="treeSelTun('${esc(t.id)}')">` +
-        `<button class="tr-caret${open ? "" : " closed"}" onclick="event.stopPropagation();treeToggle('${esc(t.id)}')" aria-label="Expand / collapse">▾</button>` +
+      `<div class="tr-row tr-tunrow${selTun ? " sel" : ""}" data-act="tun" data-tun="${esc(t.id)}">` +
+        `<button class="tr-caret${open ? "" : " closed"}" data-act="toggle" data-tun="${esc(t.id)}" aria-label="Expand / collapse">▾</button>` +
         `<span class="tr-dot ${esc(t.state)}"></span>` +
         `<span class="tr-name">${esc(t.id)}</span>` +
         `<span class="tr-type">${esc((t.type || "").toUpperCase())}</span>` +
@@ -1858,8 +1877,8 @@ function renderTree() {
         `<span class="tr-tags">${(t.tags || []).map((g) => "#" + esc(g)).join(" ")}</span>` +
         `<span class="tr-sp"></span>` +
         (t.state === "on" || t.state === "waiting"
-          ? `<button class="tr-act down" onclick="event.stopPropagation();actDown('${esc(t.id)}')">down</button>`
-          : `<button class="tr-act up" onclick="event.stopPropagation();actUp('${esc(t.id)}')">up</button>`) +
+          ? `<button class="tr-act down" data-act="down" data-tun="${esc(t.id)}">down</button>`
+          : `<button class="tr-act up" data-act="up" data-tun="${esc(t.id)}">up</button>`) +
       `</div>` +
       (open
         ? `<div class="tr-kids">${via ? `<div class="tr-via">${via}</div>` : ""}${subHTML}` +
@@ -2859,6 +2878,7 @@ window.addEventListener("resize", layout);
 setInterval(rollHist, 1000);
 rollHist();
 document.querySelectorAll(".vbtn").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+wireTree();
 renderTabs();
 renderTagbar();
 layout();
