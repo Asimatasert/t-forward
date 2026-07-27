@@ -74,11 +74,23 @@ func (a *Actions) saveSettings(s Settings) error {
 	if err != nil {
 		return err
 	}
-	tmp := a.settingsPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	path := a.settingsPath()
+	// Unique temp name in the same dir (os.CreateTemp yields mode 0600) so
+	// concurrent writers never clobber a shared ".tmp"; rename is atomic.
+	f, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, a.settingsPath())
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below has consumed it
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // requirePrivileged reports whether the request may perform a privileged action.
@@ -147,6 +159,9 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			defer r.Body.Close()
 			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in)
 		}
+		// Serialize the whole load->mutate->save so two concurrent POSTs can't
+		// each read the old blob and lose one another's field updates.
+		a.mu.Lock()
 		s := a.loadSettings()
 		if in.AdminPin != nil && *in.AdminPin != "" {
 			s.AdminSecretHash = hashPIN(*in.AdminPin)
@@ -163,7 +178,9 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if in.Notify != nil {
 			s.Notify = *in.Notify
 		}
-		if err := a.saveSettings(s); err != nil {
+		err := a.saveSettings(s)
+		a.mu.Unlock()
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}

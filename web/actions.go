@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,10 @@ type Actions struct {
 	docker  *Docker
 	scanner *Scanner
 	tfPath  string // path to the t-forward CLI
+
+	// mu serializes the persisted read-modify-write blobs owned by Actions
+	// (settings.json, panel-layout.json) so concurrent POSTs can't interleave.
+	mu sync.Mutex
 }
 
 func NewActions(hub *Hub, d *Docker, sc *Scanner, tfPath string) *Actions {
@@ -162,15 +167,36 @@ func (a *Actions) handleLayout(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
 			return
 		}
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		// Unique temp name in the same dir (os.CreateTemp yields mode 0600) so
+		// concurrent writers never clobber a shared ".tmp"; a.mu serializes them.
+		a.mu.Lock()
+		f, err := os.CreateTemp(filepath.Dir(path), ".panel-layout-*.tmp")
+		if err != nil {
+			a.mu.Unlock()
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write"})
+			return
+		}
+		tmp := f.Name()
+		if _, err := f.Write(body); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			a.mu.Unlock()
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write"})
+			return
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(tmp)
+			a.mu.Unlock()
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write"})
 			return
 		}
 		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			a.mu.Unlock()
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "rename"})
 			return
 		}
+		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
