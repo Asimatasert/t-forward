@@ -214,6 +214,9 @@ Flags: `--addr` (bind address), `--token-file <path>` (read the token from a
 file), `--config-dir`, `--tf <path to CLI>`, `--no-auth` (disable the token
 check — only on a trusted private bind). The token may also come from the
 `TF_WEB_TOKEN` env var; if none is given a random one is printed at startup.
+Unauthenticated liveness probing is available at `GET /healthz` (`200 ok`) for
+systemd or uptime monitoring. The build version can be checked at `GET /version`
+(requires authentication).
 
 The panel has **two canvases**, switched from the top bar:
 

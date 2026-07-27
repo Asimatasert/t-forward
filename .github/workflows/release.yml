@@ -68,8 +68,9 @@ jobs:
         run: |
           mkdir -p dist
           cd web
-          GOOS=linux GOARCH=amd64 go build -o ../dist/t-forward-web-linux-amd64 .
-          GOOS=linux GOARCH=arm64 go build -o ../dist/t-forward-web-linux-arm64 .
+          VERSION="${GITHUB_REF_NAME#v}"
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o ../dist/t-forward-web-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o ../dist/t-forward-web-linux-arm64 .
       - name: Stage CLI script
         run: cp t-forward dist/t-forward
       - name: Publish release
