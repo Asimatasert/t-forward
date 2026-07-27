@@ -146,7 +146,20 @@ func main() {
 	go dock.HostPingLoop(ctx)
 	go scanner.Loop(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: handler}
+	srv := &http.Server{
+		Addr:    *addr,
+		Handler: handler,
+		// Slowloris guard: bound how long a client may take to send its
+		// headers/body so a trickle can't pin a connection open indefinitely.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		// Reap idle keep-alive connections. This does NOT affect an active SSE
+		// stream, which is continuously writing.
+		IdleTimeout: 120 * time.Second,
+		// Deliberately no WriteTimeout: it is a single deadline for the whole
+		// response, and /events (see sse.go ServeHTTP) streams for the life of
+		// the connection — a WriteTimeout would sever the long-lived SSE stream.
+	}
 
 	// startup banner
 	if *noAuth {

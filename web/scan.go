@@ -559,9 +559,17 @@ func (s *Scanner) persist(conf scanConf, snap scanSnapshot) {
 		return
 	}
 	if conf.Persist == nil || *conf.Persist {
-		tmp := s.cachePath + ".tmp"
-		if os.WriteFile(tmp, b, 0o600) == nil {
-			_ = os.Rename(tmp, s.cachePath)
+		// Unique temp in the same dir so a shared ".tmp" can't be clobbered
+		// (persist is already single-writer via s.scanning, but keep it atomic).
+		if f, err := os.CreateTemp(filepath.Dir(s.cachePath), ".scan-cache-*.tmp"); err == nil {
+			tmp := f.Name()
+			_, werr := f.Write(b)
+			cerr := f.Close()
+			if werr == nil && cerr == nil {
+				_ = os.Rename(tmp, s.cachePath)
+			} else {
+				os.Remove(tmp)
+			}
 		}
 	}
 	if conf.Redis != "" {
@@ -679,6 +687,11 @@ func (a *Actions) handleScanForward(w http.ResponseWriter, r *http.Request) {
 		"hosts:\n  - ip: " + ip + "\n    forwards:\n" +
 		"      - { remote: " + port + ", local: any" + svc + " }\n"
 	confFile := confPath(a.docker.confDir, name)
+	// Refuse to clobber an existing tunnel conf of the same derived name.
+	if _, err := os.Stat(confFile); err == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "a tunnel named " + name + " already exists"})
+		return
+	}
 	if err := os.WriteFile(confFile, []byte(yaml), 0o600); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write conf: " + err.Error()})
 		return
@@ -686,6 +699,8 @@ func (a *Actions) handleScanForward(w http.ResponseWriter, r *http.Request) {
 	err := a.runTF(r.Context(), name, "up", name, "--no-prompt")
 	a.docker.broadcastState()
 	if err != nil {
+		// Roll back the conf we just wrote so a failed "up" doesn't orphan it.
+		os.Remove(confFile)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
