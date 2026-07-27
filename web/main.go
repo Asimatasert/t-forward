@@ -23,6 +23,7 @@ import (
 
 //go:embed panel/index.html
 var panelFS embed.FS
+var version = "dev"
 
 func main() {
 	var (
@@ -119,11 +120,22 @@ func main() {
 	mux.HandleFunc("/conf/", acts.privileged(acts.handleConf))
 	mux.HandleFunc("/scan", acts.handleScan)
 	mux.HandleFunc("/scan/rescan", acts.handleScanRescan)
-	// forward + device mutate config (write conf.d / devices.yaml, start a
-	// container), so they are privileged like /conf/ — otherwise the admin PIN
-	// only guards /conf/ while these do the more impactful writes ungated.
 	mux.HandleFunc("/scan/forward", acts.privileged(acts.handleScanForward))
 	mux.HandleFunc("/scan/device", acts.privileged(acts.handleScanDevice))
+
+	// ── unauthenticated liveness / version endpoints ──────────────────────
+	// Registered on the raw mux so they bypass tokenMiddleware — safe for
+	// uptime checkers and systemd monitoring. No auth required by design.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, version)
+	})
 
 	var handler http.Handler = mux
 	if !*noAuth {
@@ -239,6 +251,10 @@ func randomToken() string {
 func tokenMiddleware(want string, next http.Handler) http.Handler {
 	wantB := []byte(want)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/version" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		var got string
 		if h := r.Header.Get("Authorization"); h != "" {
 			got = trimBearer(h)
