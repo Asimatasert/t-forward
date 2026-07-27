@@ -164,6 +164,106 @@
   .zoomctl button:focus-visible { outline: 2px solid var(--copper); outline-offset: -2px; }
   #zoom-pct { width: 46px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #zoom-fit { width: 34px; font-size: 11px; letter-spacing: .04em; }
+  #zoom-reset { width: 38px; font-size: 11px; letter-spacing: .04em; }
+  #btn-settings { font-size: 15px; padding: 6px 10px; }
+
+  /* ---- tree view (the map's second face: same data as an indented list) ---- */
+  .tree-wrap {
+    position: absolute; inset: 0; overflow-y: auto; z-index: 1;
+    font-family: var(--mono); font-size: 12px;
+    padding: 46px 16px 24px;   /* clears the absolute tagbar */
+  }
+  .tree-tun { margin-bottom: 4px; }
+  .tr-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    border: 1px solid transparent; min-width: 0;
+  }
+  .tr-row:hover { background: rgba(255,255,255,0.04); }
+  .tr-row.sel { border-color: var(--copper); background: rgba(217,142,74,0.07); }
+  .tr-caret {
+    background: transparent; border: 0; color: var(--dim); cursor: pointer;
+    width: 18px; height: 18px; padding: 0; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .12s ease;
+  }
+  .tr-caret.closed { transform: rotate(-90deg); }
+  .tr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .tr-dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .tr-dot.waiting { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  .tr-dot.failed { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+  .tr-dot.sm { width: 6px; height: 6px; }
+  .tr-name { font-weight: 600; color: var(--text); }
+  .tr-type { font-size: 9.5px; letter-spacing: .1em; color: var(--copper); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 5px; }
+  .tr-rate { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tr-key { font-size: 11px; }
+  .tr-tags { color: var(--steel); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tr-sp { flex: 1; }
+  .tr-act {
+    font-family: var(--mono); font-size: 10.5px; padding: 3px 10px; border-radius: 5px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: var(--muted);
+  }
+  .tr-act:hover { color: var(--text); border-color: var(--faint); }
+  .tr-act.up:hover { color: var(--ok); border-color: var(--ok); }
+  .tr-act.down:hover { color: var(--danger); border-color: var(--danger); }
+  .tr-kids { margin-left: 13px; padding-left: 14px; border-left: 1px solid var(--line); }
+  .tr-subnet { color: var(--steel); }
+  .tr-subnet .cidr { font-weight: 600; }
+  .tr-subnet .lbl, .tr-host .name { color: var(--dim); }
+  .tr-host .ip { color: var(--text); font-weight: 600; }
+  .tr-fwd { color: var(--muted); font-size: 11.5px; padding: 3px 8px; }
+  .tr-fwd .svc { color: var(--steel); }
+  .tr-fwd .note { color: var(--dim); font-style: italic; }
+  .tr-via { color: var(--dim); font-size: 11px; padding: 2px 8px; }
+  .tree-off .tr-row, .tree-off .tr-fwd { opacity: .55; }
+  .tree-empty { color: var(--dim); padding: 30px 10px; text-align: center; }
+  .topsearch {
+    width: 220px; margin-left: 10px;
+    background: rgba(16,20,26,0.85); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--text); font-family: var(--mono); font-size: 12px; padding: 6px 10px;
+  }
+  .topsearch:focus { outline: none; border-color: var(--copper); }
+  .topsearch::placeholder { color: var(--faint); }
+  @media (max-width: 900px) { .topsearch { width: 130px; } }
+
+  /* ---- settings modal ---- */
+  .modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-start;
+    justify-content: center; padding: 6vh 16px; background: rgba(6,8,12,0.66); backdrop-filter: blur(2px); }
+  .modal[hidden] { display: none; }
+  .modal-card { width: min(560px, 100%); max-height: 84vh; display: flex; flex-direction: column;
+    background: var(--raise, #161b22); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.5); overflow: hidden; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .modal-x { background: transparent; border: 0; color: var(--dim); font-size: 22px; line-height: 1;
+    cursor: pointer; width: 30px; height: 30px; border-radius: 6px; }
+  .modal-x:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+  .modal-body { padding: 16px 18px; overflow-y: auto; font-family: var(--mono); }
+  .set-sec { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--copper);
+    margin: 20px 0 10px; }
+  .set-sec:first-child { margin-top: 0; }
+  .set-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .set-row label { flex: 0 0 128px; font-size: 12.5px; color: var(--muted); }
+  .set-row input[type=text], .set-row input[type=password] {
+    flex: 1; min-width: 0; background: var(--bg, #0d1117); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12.5px; padding: 7px 9px; }
+  .set-row input:focus { outline: none; border-color: var(--copper); }
+  .set-hint { font-size: 11px; color: var(--dim); margin: -4px 0 12px 138px; }
+  .set-ok { color: var(--ok); }
+  .set-toggles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .set-tog { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none;
+    background: var(--bg, #0d1117); border: 1px solid var(--line); border-radius: 20px; padding: 6px 12px;
+    font-size: 12px; color: var(--muted); }
+  .set-tog.on { border-color: var(--ok); color: var(--text); }
+  .set-tog .knob { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .set-tog.on .knob { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .modal-actions { display: flex; gap: 8px; align-items: center; margin-top: 22px; }
+  .modal-actions .spacer { flex: 1; }
+  .set-msg { font-size: 12px; color: var(--muted); }
+  .set-lock { text-align: center; padding: 20px 0; }
+  .set-lock p { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
   .mapctl {
     position: absolute; bottom: 12px; right: 12px;
     display: flex; flex-direction: column; gap: 4px; z-index: 3;
@@ -410,10 +510,13 @@
 <header class="topbar">
   <div class="brand"><span class="mark">tf</span>t-forward</div>
   <div class="viewseg" id="viewseg" role="tablist" aria-label="View">
-    <button class="vbtn" data-view="map" role="tab">Tunnels</button>
+    <button class="vbtn" data-view="map" role="tab">Map</button>
+    <button class="vbtn" data-view="tree" role="tab">Tree</button>
     <button class="vbtn" data-view="lan" role="tab">LAN</button>
   </div>
   <span class="chip"><span class="dot"></span>docker · orbstack</span>
+  <input class="topsearch" id="top-search" type="search"
+         placeholder="search name / ip / tag…" aria-label="Search tunnels by name, IP or tag">
   <div class="spacer"></div>
   <div class="throughput">
     <span><span class="sw" style="background:var(--tx)"></span>TX <span class="v" id="agg-tx">—</span></span>
@@ -421,7 +524,18 @@
   </div>
   <button class="btn" id="topbtn-primary" onclick="topPrimary()">New tunnel</button>
   <button class="btn danger-ghost" onclick="actDownAll()">Down all</button>
+  <button class="btn" id="btn-settings" title="Settings" onclick="openSettings()" aria-label="Settings">⚙</button>
 </header>
+
+<div class="modal" id="settings-modal" hidden>
+  <div class="modal-card" role="dialog" aria-label="Settings">
+    <div class="modal-head">
+      <h2>Settings</h2>
+      <button class="modal-x" onclick="closeSettings()" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body" id="settings-body"></div>
+  </div>
+</div>
 
 <div class="shell">
   <nav class="tabrail" id="tabrail" aria-label="Tunnel types"></nav>
@@ -429,6 +543,7 @@
   <div class="mid">
     <div class="map-wrap" id="map-wrap">
       <div class="map-scroll" id="map-scroll"><div id="map-sizer"><canvas id="map"></canvas></div></div>
+      <div class="tree-wrap" id="tree-wrap" hidden></div>
       <div class="map-legend">
         <span><span class="sw" style="background:var(--tx)"></span>TX →</span>
         <span><span class="sw" style="background:var(--rx)"></span>← RX</span>
@@ -436,11 +551,11 @@
       </div>
       <div class="zoomctl" id="zoomctl" aria-label="Zoom controls">
         <button id="lock-toggle" title="Lock box positions">🔓</button>
+        <button id="zoom-reset" title="Auto-arrange: reset every box to its automatic position (clears the shared layout)">auto</button>
         <button id="zoom-out" title="Zoom out (scroll ↓)">−</button>
         <button id="zoom-pct" title="Reset zoom &amp; recenter">100%</button>
         <button id="zoom-in" title="Zoom in (scroll ↑)">+</button>
         <button id="zoom-fit" title="Fit the whole map">fit</button>
-        <button id="zoom-reset" title="Reset boxes to their auto positions">⟲</button>
       </div>
       <div class="tagbar" id="tagbar" aria-label="Tag filters"></div>
     </div>
@@ -629,6 +744,7 @@ let tab = "all";
 let selected = "bursa";
 let activeTag = null;
 let stateFilter = "all";   // all | on | off
+let query = "";            // topbar search: tunnel name / host ip+name / tag / port
 function renderTabs() {
   const el = document.getElementById("tabrail");
   el.innerHTML = "";
@@ -741,11 +857,36 @@ function sizeCanvas() {
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let G = { nodes: [], edges: [], W: 900, H: 600, z: 1 };
+// Logical scene size for the tunnel map — a fixed grid so shared layouts mean
+// the same thing on every screen (the map grows past this when content needs it).
+const SCENE_W = 1600, SCENE_H = 900;
 // camera zoom for the map (scroll position on mapScroll does the panning). The
 // scene is laid out at logical coords; cam.z scales the rendered output and the
-// scroll sizer, so native scrollbars keep working at any zoom.
+// scroll sizer, so native scrollbars keep working at any zoom. Zoom is
+// PER-CLIENT (localStorage), never shared — each screen fits the scene itself.
 const cam = { z: 1 };
 const MIN_Z = 0.35, MAX_Z = 2.6;
+let camSaved = false;   // becomes true once this client picked/restored a zoom
+try {
+  const z = parseFloat(localStorage.getItem("tf.camZ"));
+  if (z >= MIN_Z && z <= MAX_Z) { cam.z = z; camSaved = true; }
+} catch (e) {}
+function persistCam() {
+  camSaved = true;
+  try { localStorage.setItem("tf.camZ", cam.z.toFixed(3)); } catch (e) {}
+}
+// fit the whole scene into this client's viewport (downscale only)
+function fitView() {
+  cam.z = Math.max(MIN_Z, Math.min(1, Math.min(mapScroll.clientWidth / G.W, mapScroll.clientHeight / G.H)));
+  sizeCanvas(); mapScroll.scrollLeft = 0; mapScroll.scrollTop = 0; setZoomLabel();
+}
+// first render on a client with no saved zoom: auto-fit so smaller screens see
+// the whole shared scene instead of a corner of it
+function maybeAutoFit() {
+  if (camSaved || view !== "map" || !tunnels.length) return;
+  camSaved = true;
+  fitView();
+}
 function setZoomLabel() {
   const el = document.getElementById("zoom-pct");
   if (el) el.textContent = Math.round(cam.z * 100) + "%";
@@ -811,11 +952,30 @@ function nodeAt(sx, sy) {
   return null;
 }
 
+// does this tunnel match the topbar search? Checks tunnel name/desc, tags,
+// host IPs and their names/tags, and forward endpoints (remote + local port).
+function matchesQuery(t) {
+  if (!query) return true;
+  const q = query;
+  if (t.id.toLowerCase().includes(q) || (t.desc || "").toLowerCase().includes(q)) return true;
+  if ((t.tags || []).some((g) => g.toLowerCase().includes(q))) return true;
+  const hosts = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))];
+  if (hosts.some((h) =>
+    h.includes(q) ||
+    ((t.hostNotes || {})[h] || "").toLowerCase().includes(q) ||
+    ((t.hostTags || {})[h] || []).some((g) => g.toLowerCase().includes(q)))) return true;
+  if ((t.forwards || []).some((f) =>
+    (f.remote || "").includes(q) || (f.local || "").includes(q) ||
+    (f.service || "").toLowerCase().includes(q))) return true;
+  return false;
+}
+
 function visibleTunnels() {
   return tunnels.filter((t) =>
     (tab === "all" || t.type === tab) &&
     (!activeTag || (t.tags || []).includes(activeTag)) &&
-    (stateFilter === "all" || (stateFilter === "on" ? t.state === "on" : t.state !== "on")));
+    (stateFilter === "all" || (stateFilter === "on" ? t.state === "on" : t.state !== "on")) &&
+    matchesQuery(t));
 }
 
 /* ---- virtual subnet resolution ----
@@ -882,6 +1042,7 @@ function makeSubnetNode(t, cidr, x, y, z, note, info, off) {
 }
 
 function layout() {
+  if (view === "tree") { renderTree(); return; }
   if (view === "lan") { layoutScan(); drawStatic(); return; }
   const vis = visibleTunnels();
   // Jump children: a visible tunnel whose t.jump targets another VISIBLE tunnel
@@ -899,8 +1060,12 @@ function layout() {
     }
   });
   const anyJump = jumpKidIds.size > 0;
-  const W = Math.max(760, mapWrap.clientWidth);
-  const availH = Math.max(300, mapWrap.clientHeight);
+  // The scene is laid out on a FIXED logical grid, never the client's viewport:
+  // node positions are shared across machines (POST /layout), so two screens of
+  // different sizes must agree on what a coordinate means. Each client then fits
+  // the shared scene with its own camera (fitView / persisted tf.camZ).
+  const W = SCENE_W;
+  const availH = SCENE_H;
 
   /* natural (z=1) heights — configured targets show even when the tunnel is
      down (as dimmed placeholders). Each target box is as tall as its content
@@ -1440,7 +1605,7 @@ function tick(ts) {
   // nodes → a very tall canvas). Redrawing it every frame froze the UI; instead
   // it's drawn once on layout/selection change (drawStatic), so the rAF loop
   // only animates the tunnel canvas.
-  if (view === "lan") { requestAnimationFrame(tick); return; }
+  if (view === "lan" || view === "tree") { requestAnimationFrame(tick); return; }
   spawnParticles();
   stepParticles();
   draw(ts);
@@ -1526,6 +1691,7 @@ function zoomAt(nz, cx, cy) {
   mapScroll.scrollLeft = sx * nz - cx;
   mapScroll.scrollTop = sy * nz - cy;
   setZoomLabel();
+  persistCam();
 }
 mapScroll.addEventListener("wheel", (ev) => {
   if (view === "lan") return;
@@ -1538,15 +1704,16 @@ document.getElementById("zoom-in").addEventListener("click", () => zoomCentered(
 document.getElementById("zoom-out").addEventListener("click", () => zoomCentered(cam.z / 1.25));
 document.getElementById("zoom-pct").addEventListener("click", () => {
   cam.z = 1; sizeCanvas(); mapScroll.scrollLeft = 0; mapScroll.scrollTop = 0; setZoomLabel();
+  persistCam();
 });
-document.getElementById("zoom-fit").addEventListener("click", () => {
-  cam.z = Math.max(MIN_Z, Math.min(1, Math.min(mapScroll.clientWidth / G.W, mapScroll.clientHeight / G.H)));
-  sizeCanvas(); mapScroll.scrollLeft = 0; mapScroll.scrollTop = 0; setZoomLabel();
-});
+document.getElementById("zoom-fit").addEventListener("click", () => { fitView(); persistCam(); });
 document.getElementById("zoom-reset").addEventListener("click", () => {
+  // the arrangement is shared across machines — wiping it affects everyone
+  if (!confirm("Auto-arrange the map? This clears the shared hand-made layout for all screens.")) return;
   savedPos = {};
   persistLayout();
   layout();
+  fitView();
 });
 function setLockUI() {
   const b = document.getElementById("lock-toggle");
@@ -1597,6 +1764,111 @@ canvas.style.cursor = "grab";
     layout();
   });
 })();
+
+/* ============================================================ tree view */
+// The map's second face: the same tunnels → subnets → hosts → forwards as an
+// indented list. It shares every filter (type tab, tag, state, search) and the
+// right-hand panel selection with the canvas — only the rendering differs.
+let treeOpen = {};
+try { treeOpen = JSON.parse(localStorage.getItem("tf.treeOpen") || "{}") || {}; } catch (e) { treeOpen = {}; }
+function treeIsOpen(id) { return treeOpen[id] !== false; }   // default expanded
+function treeToggle(id) {
+  treeOpen[id] = !treeIsOpen(id);
+  try { localStorage.setItem("tf.treeOpen", JSON.stringify(treeOpen)); } catch (e) {}
+  renderTree();
+}
+function treeSelTun(id) { selected = id; sel = { kind: "tunnel" }; renderPanel(); renderTree(); }
+function treeSelHost(id, host) { selected = id; sel = { kind: "host", tun: id, host }; renderPanel(); renderTree(); }
+function treeSelSubnet(id, cidr) { selected = id; sel = { kind: "subnet", tun: id, cidr }; renderPanel(); renderTree(); }
+
+function treeRateStr(t) {
+  return t.state === "on" && t.rate ? `↑${fmtRate(t.rate.tx)} ↓${fmtRate(t.rate.rx)}` : "";
+}
+// live rate column updates between full renders (fed from applyStat)
+function treeStatTick(t) {
+  if (view !== "tree") return;
+  const el = document.querySelector(`[data-tree-rate="${CSS.escape(t.id)}"]`);
+  if (el) el.textContent = treeRateStr(t);
+}
+
+function renderTree() {
+  const el = document.getElementById("tree-wrap");
+  if (!el) return;
+  const vis = visibleTunnels();
+  if (!vis.length) {
+    el.innerHTML = '<div class="tree-empty">no tunnels match — clear the filters or the search</div>';
+    return;
+  }
+  el.innerHTML = vis.map((t) => {
+    const off = t.state !== "on";
+    const open = treeIsOpen(t.id);
+    const selTun = sel.kind === "tunnel" && selected === t.id;
+    const hosts = [...new Set((t.forwards || []).map((f) => f.remote.split(":")[0]))];
+    // group hosts under their virtual subnet — same resolution as the map
+    const bySub = {}, direct = [];
+    hosts.forEach((h) => {
+      const s = subnetFor(t, h);
+      if (s) (bySub[s] || (bySub[s] = [])).push(h); else direct.push(h);
+    });
+
+    const hostHTML = (h) => {
+      const name = (t.hostNotes && t.hostNotes[h]) || "";
+      const htags = ((t.hostTags && t.hostTags[h]) || []).map((g) => "#" + esc(g)).join(" ");
+      const reach = !off && t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, h) ? t.hostUp[h] : null;
+      const hSel = sel.kind === "host" && sel.tun === t.id && sel.host === h;
+      const lines = (t.forwards || []).filter((f) => f.remote.split(":")[0] === h).map((f) => {
+        const lp = (f.local || "").split(":").pop() || "—";
+        const pr = !off && t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote) ? t.portUp[f.remote] : null;
+        return `<div class="tr-fwd"><span class="tr-dot sm ${pr === true ? "on" : pr === false ? "failed" : ""}"></span>` +
+          `<span>${f.service ? `<span class="svc">(${esc(f.service)})</span> ` : ""}` +
+          `:${esc(f.remote.split(":")[1] || "")} ← ${esc(lp)}` +
+          `${f.note ? ` <span class="note">· ${esc(f.note)}</span>` : ""}</span></div>`;
+      }).join("");
+      return `<div class="tr-row tr-host${hSel ? " sel" : ""}" onclick="treeSelHost('${esc(t.id)}','${esc(h)}')">` +
+        `<span class="tr-dot sm ${reach === true ? "on" : reach === false ? "failed" : ""}"></span>` +
+        `<span class="ip">${esc(h)}</span>` +
+        `${name ? `<span class="name">${esc(name)}</span>` : ""}` +
+        `${htags ? `<span class="tr-tags">${htags}</span>` : ""}</div>` +
+        `<div class="tr-kids">${lines}</div>`;
+    };
+
+    const subHTML = Object.keys(bySub).map((cidr) => {
+      const note = (t.subnetNotes && t.subnetNotes[cidr]) || "virtual";
+      const ourIP = (!off && t.tunSubnet === cidr && t.tunIP) ? " · you " + t.tunIP : "";
+      const sSel = sel.kind === "subnet" && sel.tun === t.id && sel.cidr === cidr;
+      return `<div class="tr-row tr-subnet${sSel ? " sel" : ""}" onclick="treeSelSubnet('${esc(t.id)}','${esc(cidr)}')">` +
+        `<span class="cidr">${esc(cidr)}</span><span class="lbl">${esc(note)}${esc(ourIP)}</span></div>` +
+        `<div class="tr-kids">${bySub[cidr].map(hostHTML).join("")}</div>`;
+    }).join("");
+
+    // how this tunnel gets out: cross-tunnel jump, ssh chain, or plain ssh host
+    let via = "";
+    if (t.jump && t.jump.host) via = `jump · via ${esc(t.jump.tun)} @ ${esc(t.jump.host)}`;
+    else if (t.type === "ssh" && (t.sshJump || []).length)
+      via = "chain · " + [...t.sshJump, t.sshHost].filter(Boolean).map((x) => esc(x)).join(" → ");
+
+    return `<div class="tree-tun${off ? " tree-off" : ""}">` +
+      `<div class="tr-row tr-tunrow${selTun ? " sel" : ""}" onclick="treeSelTun('${esc(t.id)}')">` +
+        `<button class="tr-caret${open ? "" : " closed"}" onclick="event.stopPropagation();treeToggle('${esc(t.id)}')" aria-label="Expand / collapse">▾</button>` +
+        `<span class="tr-dot ${esc(t.state)}"></span>` +
+        `<span class="tr-name">${esc(t.id)}</span>` +
+        `<span class="tr-type">${esc((t.type || "").toUpperCase())}</span>` +
+        `${t.totp ? '<span class="tr-key" title="TOTP-gated">🔑</span>' : ""}` +
+        `<span class="tr-rate" data-tree-rate="${esc(t.id)}">${treeRateStr(t)}</span>` +
+        `<span class="tr-tags">${(t.tags || []).map((g) => "#" + esc(g)).join(" ")}</span>` +
+        `<span class="tr-sp"></span>` +
+        (t.state === "on" || t.state === "waiting"
+          ? `<button class="tr-act down" onclick="event.stopPropagation();actDown('${esc(t.id)}')">down</button>`
+          : `<button class="tr-act up" onclick="event.stopPropagation();actUp('${esc(t.id)}')">up</button>`) +
+      `</div>` +
+      (open
+        ? `<div class="tr-kids">${via ? `<div class="tr-via">${via}</div>` : ""}${subHTML}` +
+          `${direct.map(hostHTML).join("")}` +
+          `${hosts.length ? "" : '<div class="tr-via">no forwards configured</div>'}</div>`
+        : "") +
+      `</div>`;
+  }).join("");
+}
 
 /* ============================================================== panel */
 // full HTML-escape (text AND attribute contexts): a discovered device's hostname
@@ -2217,6 +2489,101 @@ async function action(path, body, okMsg) {
     return false;
   }
 }
+
+/* ---- settings modal (Phase 1: admin gate, telegram creds, notify toggles) ---- */
+let adminUnlocked = sessionStorage.getItem("tf.adminUnlocked") === "1";
+function openSettings() { document.getElementById("settings-modal").hidden = false; renderSettings(); }
+function closeSettings() { document.getElementById("settings-modal").hidden = true; }
+async function fetchSettings() {
+  try { const r = await fetch(withTok("/settings"), { headers: { "X-Token": TOKEN } }); return r.ok ? await r.json() : null; }
+  catch (e) { return null; }
+}
+function settingsLockScreen(el) {
+  el.innerHTML = `
+    <div class="set-lock">
+      <p>Settings are locked. Enter the admin PIN to continue.</p>
+      <div class="set-row" style="justify-content:center">
+        <input type="password" id="set-pin" placeholder="PIN" style="max-width:180px">
+        <button class="btn primary" id="set-unlock">Unlock</button>
+      </div>
+      <div class="set-msg" id="set-lock-msg"></div>
+    </div>`;
+  const go = async () => {
+    const pin = el.querySelector("#set-pin").value;
+    const r = await fetch(withTok("/admin/unlock"), {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify({ pin }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) { adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); renderSettings(); }
+    else el.querySelector("#set-lock-msg").textContent = "wrong PIN";
+  };
+  el.querySelector("#set-unlock").addEventListener("click", go);
+  const pin = el.querySelector("#set-pin"); pin.focus();
+  pin.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+}
+async function renderSettings() {
+  const el = document.getElementById("settings-body");
+  el.innerHTML = `<div class="set-msg">loading…</div>`;
+  const s = await fetchSettings();
+  if (!s) { el.innerHTML = `<div class="set-msg">could not load settings</div>`; return; }
+  if (s.adminSet && !adminUnlocked) { settingsLockScreen(el); return; }
+  const nf = s.notify || {};
+  const tog = (k, label) => `<span class="set-tog${nf[k] ? " on" : ""}" data-nf="${k}"><span class="knob"></span>${label}</span>`;
+  el.innerHTML = `
+    <div class="set-sec">Admin</div>
+    <div class="set-row"><label>${s.adminSet ? "Change PIN" : "Set a PIN"}</label>
+      <input type="password" id="set-adminpin" placeholder="${s.adminSet ? "leave blank to keep" : "protect settings & chatbot"}"></div>
+    <div class="set-hint">${s.adminSet
+      ? "A PIN is set — config edits and (later) the chatbot require it."
+      : "No PIN yet. Anyone on the tailnet can change these until you set one."}</div>
+
+    <div class="set-sec">Telegram</div>
+    <div class="set-row"><label>Bot token</label>
+      <input type="password" id="set-tgtoken" placeholder="${s.telegramConfigured ? "configured ✓ — blank to keep" : "123456:ABC…"}"></div>
+    <div class="set-row"><label>Chat ID</label>
+      <input type="text" id="set-tgchat" value="${esc(s.telegramChatId || "")}" placeholder="e.g. 55512345"></div>
+
+    <div class="set-sec">Notify on</div>
+    <div class="set-toggles">${tog("down", "Tunnel down")}${tog("up", "Tunnel up")}${tog("warn", "Warnings & errors")}${tog("reach", "Reachability change")}</div>
+    <div class="set-hint" style="margin-left:0">Per-VPN / per-host scoping and a test button arrive with the notification engine.</div>
+
+    <div class="modal-actions">
+      <span class="set-msg" id="set-save-msg"></span>
+      <span class="spacer"></span>
+      <button class="btn" onclick="closeSettings()">Close</button>
+      <button class="btn primary" id="set-save">Save</button>
+    </div>`;
+  el.querySelectorAll(".set-tog").forEach((t) => t.addEventListener("click", () => t.classList.toggle("on")));
+  el.querySelector("#set-save").addEventListener("click", () => saveSettings(el, s));
+}
+async function saveSettings(el, prev) {
+  const notify = {};
+  el.querySelectorAll(".set-tog").forEach((t) => { notify[t.dataset.nf] = t.classList.contains("on"); });
+  if (prev.notify) { notify.perTunnel = prev.notify.perTunnel; notify.perHost = prev.notify.perHost; }
+  const body = { notify, telegramChatId: el.querySelector("#set-tgchat").value.trim() };
+  const pin = el.querySelector("#set-adminpin").value;
+  if (pin) body.adminPin = pin;
+  const tgtoken = el.querySelector("#set-tgtoken").value;
+  if (tgtoken) body.telegramToken = tgtoken;
+  const r = await fetch(withTok("/settings"), {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.ok) {
+    if (pin) { adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); }
+    toast("settings saved"); renderSettings();
+  } else if (r.status === 403) {
+    adminUnlocked = false; sessionStorage.removeItem("tf.adminUnlocked");
+    renderSettings();
+  } else {
+    el.querySelector("#set-save-msg").textContent = "save failed: " + (j.error || r.status);
+  }
+}
+document.addEventListener("keydown", (e) => {
+  const m = document.getElementById("settings-modal");
+  if (e.key === "Escape" && m && !m.hidden) closeSettings();
+});
+
 // re-pull state a few times after an action so transitions (idle→waiting→on)
 // show quickly even when the SSE stream is blocked (e.g. by a proxy)
 function afterAct() { [300, 1200, 3000, 6000].forEach((ms) => setTimeout(pullState, ms)); }
@@ -2232,17 +2599,27 @@ function actCode(id) {
 // ---- top-level view switch (two separate canvases) ----
 function setView(v) {
   view = v;
+  try { localStorage.setItem("tf.view", v); } catch (e) {}
   document.querySelectorAll(".vbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
-  // the tunnel-type rail belongs to the tunnel canvas only; the event console is
+  // the tunnel-type rail belongs to the tunnel/tree views; the event console is
   // shared (it also carries LAN scan events)
   document.getElementById("tabrail").style.display = v === "lan" ? "none" : "";
   document.getElementById("topbtn-primary").textContent = v === "lan" ? "Rescan" : "New tunnel";
+  // Map and Tree are two faces of the same data: swap the canvas for the list,
+  // and hide the canvas-only chrome (zoom controls, legend) in tree mode.
+  const isTree = v === "tree";
+  document.getElementById("tree-wrap").hidden = !isTree;
+  document.getElementById("map-scroll").style.display = isTree ? "none" : "";
+  const zc = document.getElementById("zoomctl"); if (zc) zc.style.display = isTree ? "none" : "";
+  const lg = document.querySelector(".map-legend"); if (lg) lg.style.display = isTree ? "none" : "";
   if (v === "lan") {
     if (sel.kind !== "device") sel = { kind: "lan" };
   } else if (sel.kind === "device" || sel.kind === "lan") {
     sel = { kind: "tunnel" };
   }
-  renderTagbar(); layout(); renderPanel();
+  renderTagbar();
+  if (isTree) renderTree(); else layout();
+  renderPanel();
 }
 function topPrimary() {
   if (view === "lan") actRescan();
@@ -2374,6 +2751,7 @@ function applyState(list) {
     if (!t || !(t.forwards || []).some((f) => f.remote.split(":")[0] === sel.host)) sel = { kind: "tunnel" };
   }
   renderTabs(); renderTagbar(); layout(); renderPanel();
+  maybeAutoFit();   // first render on a fresh client: fit the shared scene
 }
 
 function applyStat(s) {
@@ -2381,6 +2759,7 @@ function applyStat(s) {
   if (!t) return;
   if (!t.hist) initHist(t);
   t.rate = { tx: Number(s.txRate) || 0, rx: Number(s.rxRate) || 0 };
+  treeStatTick(t);   // keep the tree view's rate column live between snapshots
 }
 
 // Pull the full state over plain HTTP. The panel used to rely ENTIRELY on the
@@ -2466,14 +2845,28 @@ function connectSSE() {
 }
 
 window.addEventListener("resize", layout);
+// topbar search: filters the tunnel map + tree live ("#tag" works too)
+(function () {
+  const q = document.getElementById("top-search");
+  q.addEventListener("input", () => {
+    query = q.value.trim().toLowerCase().replace(/^#/, "");
+    renderTagbar(); layout();
+  });
+  q.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { q.value = ""; query = ""; renderTagbar(); layout(); q.blur(); }
+  });
+})();
 setInterval(rollHist, 1000);
 rollHist();
 document.querySelectorAll(".vbtn").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-document.querySelector('.vbtn[data-view="map"]').classList.add("active");
 renderTabs();
 renderTagbar();
 layout();
 renderPanel();
+// restore the last-used view (Map / Tree / LAN) for this client
+let savedView = "map";
+try { const v = localStorage.getItem("tf.view"); if (v === "map" || v === "tree" || v === "lan") savedView = v; } catch (e) {}
+setView(savedView);
 // shared hand-arranged layout from the server (source of truth across machines);
 // falls back to whatever localStorage already seeded if the request fails
 fetch(withTok("/layout"), { headers: { "X-Token": TOKEN } })
