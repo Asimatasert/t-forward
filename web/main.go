@@ -23,6 +23,7 @@ import (
 
 //go:embed panel/index.html
 var panelFS embed.FS
+var version = "dev"
 
 func main() {
 	var (
@@ -124,6 +125,35 @@ func main() {
 	// only guards /conf/ while these do the more impactful writes ungated.
 	mux.HandleFunc("/scan/forward", acts.privileged(acts.handleScanForward))
 	mux.HandleFunc("/scan/device", acts.privileged(acts.handleScanDevice))
+
+	// ── liveness & version endpoints ───────────────────────────────────────
+	// /healthz is unauthenticated (bypasses tokenMiddleware) so systemd / uptime
+	// checkers can ping it. /version is token-gated to avoid unauthenticated
+	// build fingerprinting. Both accept GET and HEAD only.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = fmt.Fprint(w, "ok\n")
+		}
+	})
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = fmt.Fprintln(w, version)
+		}
+	})
 
 	var handler http.Handler = mux
 	if !*noAuth {
@@ -239,6 +269,10 @@ func randomToken() string {
 func tokenMiddleware(want string, next http.Handler) http.Handler {
 	wantB := []byte(want)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		var got string
 		if h := r.Header.Get("Authorization"); h != "" {
 			got = trimBearer(h)
