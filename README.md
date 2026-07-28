@@ -159,6 +159,13 @@ t-forward up --ssh-host bastion.example.com --ssh-user username1 \
 t-forward up --type local --name printer --forward 9100:192.168.1.77:9100
 ```
 
+**Shell completion.** Completes verbs and tunnel names (`up`/`down`/`code`/`logs`/`events`):
+
+```sh
+source <(t-forward completion bash)                 # bash — add to ~/.bashrc
+t-forward completion zsh > "${fpath[1]}/_t-forward" # zsh — then restart the shell
+```
+
 ## TOTP flow (vpn)
 
 For `totp: true` VPNs the password is sent automatically; the CLI then waits:

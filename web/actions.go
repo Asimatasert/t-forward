@@ -41,6 +41,20 @@ type Actions struct {
 	// mu serializes the persisted read-modify-write blobs owned by Actions
 	// (settings.json, panel-layout.json) so concurrent POSTs can't interleave.
 	mu sync.Mutex
+
+	// baseCtx is the daemon-lifetime context (set once in main before serving).
+	// Tunnel mutations (up/down/code) run on it, NOT the HTTP request context, so
+	// a client disconnect mid-request doesn't SIGKILL the CLI partway through.
+	baseCtx context.Context
+}
+
+// opCtx returns the context that a state-changing CLI invocation should run on:
+// the daemon-lifetime context, so it survives the HTTP client going away.
+func (a *Actions) opCtx() context.Context {
+	if a.baseCtx != nil {
+		return a.baseCtx
+	}
+	return context.Background()
 }
 
 func NewActions(hub *Hub, d *Docker, sc *Scanner, tfPath string) *Actions {
@@ -121,7 +135,7 @@ func (a *Actions) handleUp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid name"})
 		return
 	}
-	err := a.runTF(r.Context(), name, "up", name, "--no-prompt")
+	err := a.runTF(a.opCtx(), name, "up", name, "--no-prompt")
 	a.docker.broadcastState()
 	if err != nil && exitCode(err) != 3 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -214,7 +228,7 @@ func (a *Actions) handleDown(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid name"})
 		return
 	}
-	err := a.runTF(r.Context(), name, "down", name)
+	err := a.runTF(a.opCtx(), name, "down", name)
 	a.docker.broadcastState()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -257,7 +271,7 @@ func (a *Actions) deliverCode(w http.ResponseWriter, r *http.Request, name, code
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid code"})
 		return
 	}
-	err := a.runTF(r.Context(), name, "code", name, code)
+	err := a.runTF(a.opCtx(), name, "code", name, code)
 	a.docker.broadcastState()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})

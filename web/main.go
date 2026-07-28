@@ -166,6 +166,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Tunnel mutations run on this daemon-lifetime context, not the HTTP request
+	// context, so a client disconnect can't SIGKILL an up/down/code mid-flight.
+	acts.baseCtx = ctx
 
 	// background live readers
 	go dock.StatsLoop(ctx)
