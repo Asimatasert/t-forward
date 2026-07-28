@@ -59,6 +59,10 @@ cleanup() {
     done
 }
 trap cleanup EXIT
+# Also fire cleanup on the common termination signals: bash runs the EXIT trap
+# when a signal handler exits, so a Ctrl-C / kill / terminal-close during the
+# wait loop still removes transient auth files instead of leaving them on disk.
+trap 'exit 130' INT TERM HUP
 
 slugify() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
@@ -109,6 +113,9 @@ ensure_image() {
 enforce_perms() {
     # config files may contain passwords: force mode 600
     local f=$1 mode
+    # Only ever tighten a real, regular file — never chmod through a symlink
+    # (whose target we shouldn't touch) or act on a non-regular --config target.
+    [ -f "$f" ] && [ ! -L "$f" ] || return 0
     # GNU/Linux stat first (-c), then BSD/macOS (-f). Order matters: on Linux
     # `stat -f` succeeds with UNRELATED filesystem info, so trying it first would
     # never fall through to the correct form.
@@ -185,7 +192,6 @@ yaml_load() {
     SERVERCERT=$(yqs "$file" .vpn.servercert); AUTHGROUP=$(yqs "$file" .vpn.authgroup)
     TOTP=$(yq -r '.vpn.totp // false' "$file"); TOTP_SECRET=$(yqs "$file" .vpn.totp_secret)
     NO_DTLS=$(yq -r '.vpn.no_dtls // false' "$file")
-    TOTP_COMMAND=$(yqs "$file" .totp_command)
     SSH_HOST=$(yqs "$file" .ssh.host);   SSH_PORT=$(yqs "$file" .ssh.port)
     SSH_USER=$(yqs "$file" .ssh.user);   SSH_KEY=$(yqs "$file" .ssh.key)
     SOCKS=$(yqs "$file" .socks);         RESTART=$(yq -r '.restart // false' "$file")
@@ -213,6 +219,8 @@ yaml_load() {
     # a forward without a remote port is skipped, not turned into a broken token
     FORWARDS=""
     local ftok
+    # the single-quoted yq program uses yq's own $h variable, not a shell one
+    # shellcheck disable=SC2016
     while IFS= read -r ftok; do
         [ -n "$ftok" ] && FORWARDS="$FORWARDS $ftok"
     done < <(yq -r '.hosts[]? as $h | $h.forwards[]? | select(.remote != null)
@@ -224,7 +232,7 @@ yaml_load() {
 load_conf() {
     local file=$1
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
-    AUTHGROUP="" TOTP=false TOTP_SECRET="" TOTP_COMMAND="" FORWARDS="" SOCKS="" RESTART=false
+    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
     SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
     need_yq
     yaml_load "$file" || return 1
@@ -259,12 +267,22 @@ validate_conf() {
             [ -n "$SSH_USER" ] || { warn "$n: SSH_USER is required"; return 1; }
             no_dash SSH_HOST "$SSH_HOST" || return 1
             no_dash SSH_USER "$SSH_USER" || return 1
+            no_dash SSH_JUMP "$SSH_JUMP" || return 1
+            if [ -n "$SSH_PORT" ] && ! printf '%s' "$SSH_PORT" | grep -q '^[0-9][0-9]*$'; then
+                warn "$n: SSH_PORT must be numeric ('$SSH_PORT')"; return 1
+            fi
             [ -z "$SSH_JUMP" ] || [ -n "$SSH_KEY" ] \
                 || { warn "$n: SSH_JUMP (multi-hop) needs SSH_KEY — password auth can't chain jumps"; return 1; } ;;
         local)
             [ -n "$FORWARDS" ] || [ -n "$SOCKS" ] \
                 || { warn "$n: local tunnel needs FORWARDS and/or SOCKS"; return 1; } ;;
         *)  warn "$n: unsupported TYPE '$TYPE' (vpn | ssh | local)"; return 1 ;;
+    esac
+    # SOCKS (all types), when set, is a port number or one of the sentinels.
+    case "${SOCKS:-}" in
+        ''|false|true|any) : ;;
+        *) printf '%s' "$SOCKS" | grep -q '^[0-9][0-9]*$' \
+               || { warn "$n: SOCKS must be a port number, 'any', or 'false' ('$SOCKS')"; return 1; } ;;
     esac
 }
 
@@ -307,9 +325,10 @@ parse_forward() {
     tmp=${item%:*}
     REMOTE_HOST=${tmp##*:}
     lspec=${tmp%:*}
-    [ "$lspec" != "$tmp" ] && [ -n "$REMOTE_HOST" ] \
-        && printf '%s' "$REMOTE_PORT" | grep -q '^[0-9][0-9]*$' \
-        || die "invalid forward '$item' (expected LOCAL:RHOST:RPORT)"
+    if [ "$lspec" = "$tmp" ] || [ -z "$REMOTE_HOST" ] \
+        || ! printf '%s' "$REMOTE_PORT" | grep -q '^[0-9][0-9]*$'; then
+        die "invalid forward '$item' (expected LOCAL:RHOST:RPORT)"
+    fi
     # REMOTE_HOST is embedded in a socat address ("TCP:host:port"), where a comma
     # starts socat address options — restrict it to IP / DNS-label characters so a
     # crafted host can't append socat options.
@@ -318,7 +337,11 @@ parse_forward() {
     case "$lspec" in
         any)  LOCAL_BIND="$PUBLISH_BIND"; LOCAL_PORT="" ;;
         *:*)  LOCAL_BIND=${lspec%:*}; LOCAL_PORT=${lspec##*:}
-              [ "$LOCAL_PORT" = "any" ] && LOCAL_PORT="" ;;
+              [ "$LOCAL_PORT" = "any" ] && LOCAL_PORT=""
+              # LOCAL_BIND reaches `docker run -p BIND:PORT:...`; restrict a
+              # user-supplied bind to an IPv4 literal (a stray '-x' etc. is junk).
+              printf '%s' "$LOCAL_BIND" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
+                  || die "invalid forward bind '$LOCAL_BIND' in '$item' (expected an IPv4 like 0.0.0.0)" ;;
         *)    LOCAL_BIND="$PUBLISH_BIND"; LOCAL_PORT=$lspec ;;
     esac
     if [ -n "$LOCAL_PORT" ] && ! printf '%s' "$LOCAL_PORT" | grep -q '^[0-9][0-9]*$'; then
@@ -334,6 +357,11 @@ published_port() {
 # Docker reassigns dynamically published ports on every container restart,
 # so in --restart mode "any" is resolved to a concrete free port up front.
 pick_free_port() {
+    # Best-effort: there is an unavoidable TOCTOU gap between this probe and the
+    # later `docker run -p` bind, so a racing binder could still take the port.
+    # In that case docker fails to bind and reports it; re-running `up` picks a
+    # new port. A race-free fix would require binding-and-handing-off the socket,
+    # which isn't practical from the CLI.
     local p tries=0
     while [ "$tries" -lt 50 ]; do
         p=$((20000 + RANDOM % 20000))
@@ -399,6 +427,7 @@ up_one() {
 
     # --- port publications + FORWARDS spec for the entrypoint
     local run_args=() fwd_spec="" item internal i=0
+    set -f   # $FORWARDS is space-separated: word-split it, but never glob a token
     for item in $FORWARDS; do
         parse_forward "$item"
         internal=$((INTERNAL_BASE + 1 + i))
@@ -407,6 +436,7 @@ up_one() {
         fwd_spec="${fwd_spec}${internal}|${REMOTE_HOST}|${REMOTE_PORT};"
         i=$((i + 1))
     done
+    set +f
 
     local socks_enabled=false
     if [ -n "$SOCKS" ] && [ "$SOCKS" != "false" ]; then
@@ -425,7 +455,8 @@ up_one() {
     # --- auth dir shared with the container; persists in --restart mode so
     # the entrypoint can re-authenticate after a crash/reboot restart, and in
     # --no-prompt mode so `t-forward code` can drop the verification code
-    local authdir="$STATE_DIR/auth-$(slugify "$name")"
+    local authdir
+    authdir="$STATE_DIR/auth-$(slugify "$name")"
     # tighten the parent too: without this it is created under the umask (0755),
     # letting a co-located user enumerate tunnel names (the 700 subdirs still
     # hide the secrets, but don't advertise the layout).
@@ -750,7 +781,9 @@ cmd_list() {
         fi
         nfw=0
         local item
+        set -f
         for item in $FORWARDS; do nfw=$((nfw + 1)); done
+        set +f
         case "$TYPE" in
             vpn)   via=$PROTOCOL ;;
             ssh)   via=$SSH_HOST ;;

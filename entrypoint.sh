@@ -230,6 +230,7 @@ run_ssh() {
         [ -s "$AUTH/ssh_key" ] \
             || fail "SSH_JUMP (multi-hop) needs key auth (/auth/ssh_key), not a password"
         local jhops=() hop hu hh hp
+        set -f   # split the hop list on whitespace, but never glob a hop token
         for hop in $(printf '%s' "$SSH_JUMP" | tr ',' ' '); do
             [ -n "$hop" ] || continue
             hu=$SSH_USER hh=$hop hp=22
@@ -237,6 +238,7 @@ run_ssh() {
             case "$hh" in *:*) hp=${hh##*:}; hh=${hh%:*} ;; esac
             jhops+=("${hu}@${hh}:${hp}")
         done
+        set +f
         if [ "${#jhops[@]}" -gt 0 ]; then
             local oldIFS=$IFS; IFS=,
             args+=(-J "${jhops[*]}")

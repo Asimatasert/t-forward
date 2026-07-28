@@ -32,7 +32,7 @@ jobs:
       - run: go test ./...
 
   shell:
-    name: Shell syntax
+    name: Shell lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +40,7 @@ jobs:
         run: |
           bash -n t-forward
           bash -n entrypoint.sh
+      - name: shellcheck
+        # gate on warning+; info/style nags are opinionated and vary by
+        # shellcheck version, which would make CI flaky across runner updates
+        run: shellcheck --severity=warning t-forward entrypoint.sh
