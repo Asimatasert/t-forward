@@ -816,6 +816,62 @@ cmd_menu() {
     fi
 }
 
+# Emit a bash or zsh completion script. Completes verbs, and tunnel names (from
+# the conf dir, honouring $T_FORWARD_CONFIG_DIR) for the verbs that take one.
+cmd_completion() {
+    local shell=${1:-}
+    case "$shell" in
+        bash)
+            cat <<'EOF'
+# t-forward bash completion.  Install:  source <(t-forward completion bash)
+_t_forward() {
+    local cur cmd verbs confd f names
+    cur=${COMP_WORDS[COMP_CWORD]}
+    verbs="up down code status list logs events build completion -h --help -V --version"
+    confd="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}/conf.d"
+    _tf_names() { for f in "$confd"/*.yaml; do [ -e "$f" ] && basename "$f" .yaml; done; }
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "$verbs" -- "$cur") ); return
+    fi
+    cmd=${COMP_WORDS[1]}
+    case "$cmd" in
+        up|code|logs|events) COMPREPLY=( $(compgen -W "$(_tf_names)" -- "$cur") ) ;;
+        down)                COMPREPLY=( $(compgen -W "all $(_tf_names)" -- "$cur") ) ;;
+        completion)          COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") ) ;;
+    esac
+}
+complete -F _t_forward t-forward
+EOF
+            ;;
+        zsh)
+            cat <<'EOF'
+#compdef t-forward
+# t-forward zsh completion.  Install:  t-forward completion zsh > "${fpath[1]}/_t-forward"
+#                            or:        source <(t-forward completion zsh)
+_t_forward() {
+    local confd="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}/conf.d"
+    local -a verbs names
+    verbs=(up down code status list logs events build completion)
+    names=(${(f)"$(f=; for f in $confd/*.yaml(N); do echo ${f:t:r}; done)"})
+    if (( CURRENT == 2 )); then
+        _describe -t commands 't-forward command' verbs
+        return
+    fi
+    case ${words[2]} in
+        up|code|logs|events) _describe -t tunnels 'tunnel' names ;;
+        down)                _describe -t tunnels 'tunnel' names; compadd all ;;
+        completion)          compadd bash zsh ;;
+    esac
+}
+compdef _t_forward t-forward
+EOF
+            ;;
+        *)
+            die "usage: t-forward completion bash|zsh"
+            ;;
+    esac
+}
+
 usage() {
     cat <<EOF
 t-forward $VERSION - Docker-based multi-VPN manager (openconnect)
@@ -830,6 +886,7 @@ Usage:
   t-forward logs [-f] NAME       show a tunnel's container logs
   t-forward events [-f] [NAME]   level-tagged log events
   t-forward build                (re)build the container image
+  t-forward completion bash|zsh  print a shell completion script
 
 Options:
   --config FILE|DIR              use FILE or DIR/*.yaml instead of $CONF_D
@@ -875,10 +932,12 @@ main() {
     done
     set -- ${args[@]+"${args[@]}"}
 
-    preflight
-
     cmd=${1:-menu}
     [ $# -gt 0 ] && shift
+
+    # 'completion' only prints a shell script — it needs neither docker nor yq,
+    # so skip the preflight for it (the shell sources it at startup).
+    [ "$cmd" = completion ] || preflight
 
     case "$cmd" in
         up)      scan_confs; cmd_up "$@" ;;
@@ -889,6 +948,7 @@ main() {
         logs)    scan_confs; cmd_logs "$@" ;;
         events)  scan_confs; cmd_events "$@" ;;
         build)   cmd_build "$@" ;;
+        completion) cmd_completion "$@" ;;
         menu)    scan_confs; cmd_menu ;;
         *)       usage; die "unknown command: $cmd" ;;
     esac
