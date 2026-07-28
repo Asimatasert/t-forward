@@ -18,7 +18,7 @@
 
 set -u
 
-VERSION="0.7.1"
+VERSION="0.7.2"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
 # published multi-arch image pulled when $IMAGE is missing locally (set empty
 # to force a local build instead)
