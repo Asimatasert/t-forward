@@ -61,17 +61,20 @@ func hashPIN(pin string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *Actions) settingsPath() string {
-	return filepath.Join(filepath.Dir(a.docker.confDir), "settings.json")
+func settingsPathFor(confDir string) string {
+	return filepath.Join(filepath.Dir(confDir), "settings.json")
 }
 
-func (a *Actions) loadSettings() Settings {
+func loadSettingsFor(confDir string) Settings {
 	var s Settings
-	if b, err := os.ReadFile(a.settingsPath()); err == nil {
+	if b, err := os.ReadFile(settingsPathFor(confDir)); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
 	return s
 }
+
+func (a *Actions) settingsPath() string   { return settingsPathFor(a.docker.confDir) }
+func (a *Actions) loadSettings() Settings { return loadSettingsFor(a.docker.confDir) }
 
 func (a *Actions) saveSettings(s Settings) error {
 	b, err := json.MarshalIndent(s, "", "  ")

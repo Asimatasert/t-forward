@@ -47,6 +47,28 @@ func sendTelegram(token, chatID, threadID, text string) error {
 	return nil
 }
 
+// notifyState fires (async, best-effort) a Telegram notification for tunnel
+// event `kind` ("down"/"up"/"warn"/"reach") if that event is enabled in
+// settings and Telegram is configured, routed to that event's topic. Errors
+// go to the event stream rather than being returned — this is called from
+// hot paths (state broadcasts, log tailing) that must never block on a
+// network request.
+func (d *Docker) notifyState(kind, tun, text string) {
+	s := loadSettingsFor(d.confDir)
+	enabled := map[string]bool{"down": s.Notify.Down, "up": s.Notify.Up, "warn": s.Notify.Warn, "reach": s.Notify.Reach}[kind]
+	if !enabled || s.Telegram.BotToken == "" || s.Telegram.ChatID == "" {
+		return
+	}
+	token, chatID, topic := s.Telegram.BotToken, s.Telegram.ChatID, s.Telegram.Topics[kind]
+	go func() {
+		if err := sendTelegram(token, chatID, topic, text); err != nil {
+			d.hub.Broadcast("event", map[string]any{
+				"ts": "", "level": "error", "tun": tun, "msg": "telegram notify failed: " + err.Error(),
+			})
+		}
+	}()
+}
+
 // handleNotifyTest: POST (privileged) — sends a test Telegram message for one
 // notify event, using the request's token/chatId/topicId if given (so unsaved
 // settings-modal edits can be tried before Save), falling back to the

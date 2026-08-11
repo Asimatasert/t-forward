@@ -137,6 +137,13 @@ type Docker struct {
 	// latest live data per tunnel id (rates/reachability/netinfo/clients), so
 	// State() can include it without relying on the SSE stream.
 	live map[string]*liveData
+
+	// notify edge-detection state: lastTunState is nil until the first
+	// broadcastState() (so daemon startup never fires a wave of "up" for
+	// already-running tunnels); lastWarnAt rate-limits repeated error-log
+	// notifications per tunnel.
+	lastTunState map[string]string
+	lastWarnAt   map[string]time.Time
 }
 
 // updateLive mutates (creating if needed) the cached live data for a tunnel id.
@@ -169,15 +176,16 @@ type netSample struct {
 
 func NewDocker(hub *Hub, configDir, tfPath string) *Docker {
 	return &Docker{
-		hub:       hub,
-		confDir:   filepath.Join(configDir, "conf.d"),
-		stateDir:  filepath.Join(configDir, ".auth"),
-		tfPath:    tfPath,
-		tailers:   make(map[string]*tailer),
-		lastNet:   make(map[string]netSample),
-		armed:     make(map[string]bool),
-		confCache: make(map[string]confCacheEntry),
-		live:      make(map[string]*liveData),
+		hub:        hub,
+		confDir:    filepath.Join(configDir, "conf.d"),
+		stateDir:   filepath.Join(configDir, ".auth"),
+		tfPath:     tfPath,
+		tailers:    make(map[string]*tailer),
+		lastNet:    make(map[string]netSample),
+		armed:      make(map[string]bool),
+		confCache:  make(map[string]confCacheEntry),
+		live:       make(map[string]*liveData),
+		lastWarnAt: make(map[string]time.Time),
 	}
 }
 
@@ -394,9 +402,37 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// broadcastState pushes a fresh full snapshot.
+// broadcastState pushes a fresh full snapshot, then fires down/up
+// notifications for any tunnel whose State crossed the "on" boundary since
+// the previous snapshot.
 func (d *Docker) broadcastState() {
-	d.hub.Broadcast("state", d.State())
+	snap := d.State()
+	d.hub.Broadcast("state", snap)
+
+	d.mu.Lock()
+	prev := d.lastTunState
+	cur := make(map[string]string, len(snap))
+	for _, t := range snap {
+		cur[t.ID] = t.State
+	}
+	d.lastTunState = cur
+	d.mu.Unlock()
+
+	if prev == nil {
+		return // first snapshot since daemon start — nothing to diff against
+	}
+	for _, t := range snap {
+		old, ok := prev[t.ID]
+		if !ok || old == t.State {
+			continue
+		}
+		switch {
+		case old == "on" && t.State != "on":
+			d.notifyState("down", t.ID, "🔴 "+t.ID+" is down ("+t.State+")")
+		case old != "on" && t.State == "on":
+			d.notifyState("up", t.ID, "🟢 "+t.ID+" is up")
+		}
+	}
 }
 
 // ---------------------------------------------------------------- stats loop
@@ -621,6 +657,24 @@ func contains(s string, subs ...string) bool {
 	return false
 }
 
+// warnCooldown limits "warn" notifications to at most one per tunnel per
+// window — a flapping connection can log the same error every few seconds,
+// and that shouldn't become a Telegram flood.
+const warnCooldown = 5 * time.Minute
+
+func (d *Docker) maybeNotifyWarn(tun, msg string) {
+	d.mu.Lock()
+	last, seen := d.lastWarnAt[tun]
+	fire := !seen || time.Since(last) >= warnCooldown
+	if fire {
+		d.lastWarnAt[tun] = time.Now()
+	}
+	d.mu.Unlock()
+	if fire {
+		d.notifyState("warn", tun, "⚠️ "+tun+": "+msg)
+	}
+}
+
 // tailLogs follows one container's logs and broadcasts classified events.
 func (d *Docker) tailLogs(ctx context.Context, containerName, tun string) {
 	cmd := exec.CommandContext(ctx, "docker", "logs", "-f",
@@ -644,12 +698,16 @@ func (d *Docker) tailLogs(ctx context.Context, containerName, tun string) {
 		if noisyLogLine(msg) {
 			continue // socat per-transfer spam — would flood the panel/SSE
 		}
+		level := classify(msg)
 		d.hub.Broadcast("event", map[string]any{
 			"ts":    ts,
-			"level": classify(msg),
+			"level": level,
 			"tun":   tun,
 			"msg":   msg,
 		})
+		if level == "error" {
+			d.maybeNotifyWarn(tun, msg)
+		}
 	}
 	// The scanner may have stopped early (e.g. bufio.ErrTooLong on a line larger
 	// than the token limit) while `docker logs -f` keeps writing. If we stop
@@ -1243,9 +1301,26 @@ func (d *Docker) HostPingLoop(ctx context.Context) {
 				wg.Wait()
 			}
 			if len(up) > 0 {
+				d.mu.Lock()
+				var oldUp map[string]bool
+				if ld := d.live[tn.ID]; ld != nil {
+					oldUp = ld.hostUp
+				}
+				d.mu.Unlock()
 				upC, puC := up, portUp
 				d.updateLive(tn.ID, func(ld *liveData) { ld.hostUp = upC; ld.portUp = puC })
 				d.hub.Broadcast("hosts", map[string]any{"tun": tn.ID, "up": up, "portUp": portUp})
+				// oldUp == nil on the first poll for this tunnel since (re)start —
+				// skip it so a fresh connect doesn't fire one "reach" per host.
+				for ip, nowUp := range up {
+					if wasUp, ok := oldUp[ip]; ok && wasUp != nowUp {
+						emoji, state := "🔴", "unreachable"
+						if nowUp {
+							emoji, state = "🟢", "reachable"
+						}
+						d.notifyState("reach", tn.ID, emoji+" "+tn.ID+": "+ip+" is now "+state)
+					}
+				}
 			}
 			// our IP on the VPN (tun0) and which target hosts share our subnet
 			// (same subnet -> they can talk to us / each other directly)
