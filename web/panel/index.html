@@ -2548,7 +2548,13 @@ async function renderSettings() {
   if (!s) { el.innerHTML = `<div class="set-msg">could not load settings</div>`; return; }
   if (s.adminSet && !adminUnlocked) { settingsLockScreen(el); return; }
   const nf = s.notify || {};
+  const topics = s.telegramTopics || {};
   const tog = (k, label) => `<span class="set-tog${nf[k] ? " on" : ""}" data-nf="${k}"><span class="knob"></span>${label}</span>`;
+  const topicRow = (k, label) => `
+    <div class="set-row"><label>${label}</label>
+      <input type="text" class="set-topic" data-topic="${k}" value="${esc(topics[k] || "")}" placeholder="topic id (blank = General)">
+      <button class="btn" data-nftest="${k}" type="button">Test</button></div>
+    <div class="set-msg" id="set-nftest-msg-${k}"></div>`;
   el.innerHTML = `
     <div class="set-sec">Admin</div>
     <div class="set-row"><label>${s.adminSet ? "Change PIN" : "Set a PIN"}</label>
@@ -2568,6 +2574,11 @@ async function renderSettings() {
 
     <div class="set-sec">Notify on</div>
     <div class="set-toggles">${tog("down", "Tunnel down")}${tog("up", "Tunnel up")}${tog("warn", "Warnings & errors")}${tog("reach", "Reachability change")}</div>
+    <div class="set-hint" style="margin-left:0">Each event can post to its own Telegram forum topic — leave blank for the chat's General topic.</div>
+    ${topicRow("down", "Tunnel down topic")}
+    ${topicRow("up", "Tunnel up topic")}
+    ${topicRow("warn", "Warnings & errors topic")}
+    ${topicRow("reach", "Reachability change topic")}
     <div class="set-hint" style="margin-left:0">Per-VPN / per-host scoping arrives with the notification engine.</div>
 
     <div class="modal-actions">
@@ -2578,12 +2589,39 @@ async function renderSettings() {
     </div>`;
   el.querySelectorAll(".set-tog").forEach((t) => t.addEventListener("click", () => t.classList.toggle("on")));
   el.querySelector("#set-save").addEventListener("click", () => saveSettings(el, s));
+  el.querySelector("#set-tgtest").addEventListener("click", () => testNotify(el));
+  el.querySelectorAll("[data-nftest]").forEach((b) => b.addEventListener("click", () => testNotify(el, b.dataset.nftest)));
+}
+async function testNotify(el, event) {
+  const msg = el.querySelector(event ? `#set-nftest-msg-${event}` : "#set-tgtest-msg");
+  const btn = el.querySelector(event ? `[data-nftest="${event}"]` : "#set-tgtest");
+  btn.disabled = true; msg.textContent = "sending…";
+  const body = {
+    telegramChatId: el.querySelector("#set-tgchat").value.trim(),
+    telegramToken: el.querySelector("#set-tgtoken").value,
+  };
+  if (event) {
+    body.event = event;
+    body.topicId = el.querySelector(`[data-topic="${event}"]`).value.trim();
+  }
+  try {
+    const r = await fetch(withTok("/notify/test"), {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) msg.textContent = "sent ✓";
+    else if (r.status === 403) msg.textContent = "locked — unlock admin first";
+    else msg.textContent = "failed: " + (j.error || r.status);
+  } catch (e) { msg.textContent = "failed: " + e; }
+  btn.disabled = false;
 }
 async function saveSettings(el, prev) {
   const notify = {};
   el.querySelectorAll(".set-tog").forEach((t) => { notify[t.dataset.nf] = t.classList.contains("on"); });
   if (prev.notify) { notify.perTunnel = prev.notify.perTunnel; notify.perHost = prev.notify.perHost; }
-  const body = { notify, telegramChatId: el.querySelector("#set-tgchat").value.trim() };
+  const telegramTopics = {};
+  el.querySelectorAll(".set-topic").forEach((t) => { telegramTopics[t.dataset.topic] = t.value.trim(); });
+  const body = { notify, telegramTopics, telegramChatId: el.querySelector("#set-tgchat").value.trim() };
   const pin = el.querySelector("#set-adminpin").value;
   if (pin) body.adminPin = pin;
   const tgtoken = el.querySelector("#set-tgtoken").value;

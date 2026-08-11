@@ -29,6 +29,10 @@ type Settings struct {
 type TelegramConf struct {
 	BotToken string `json:"botToken,omitempty"`
 	ChatID   string `json:"chatId,omitempty"`
+	// message_thread_id per notify event key ("down"/"up"/"warn"/"reach"), so
+	// each event type can post to its own forum topic. A missing/empty key
+	// posts to the chat's General topic (or a non-forum chat).
+	Topics map[string]string `json:"topics,omitempty"`
 }
 
 // NotifyConf holds the global per-event toggles plus per-tunnel / per-host
@@ -141,6 +145,7 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"adminSet":           s.AdminSecretHash != "",
 			"telegramConfigured": s.Telegram.BotToken != "" && s.Telegram.ChatID != "",
 			"telegramChatId":     s.Telegram.ChatID, // not a secret; helps confirm the target
+			"telegramTopics":     s.Telegram.Topics,
 			"claudeKeySet":       s.ClaudeAPIKey != "",
 			"notify":             s.Notify,
 		})
@@ -149,11 +154,12 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			AdminPin       *string     `json:"adminPin"`
-			TelegramToken  *string     `json:"telegramToken"`
-			TelegramChatID *string     `json:"telegramChatId"`
-			ClaudeAPIKey   *string     `json:"claudeApiKey"`
-			Notify         *NotifyConf `json:"notify"`
+			AdminPin       *string           `json:"adminPin"`
+			TelegramToken  *string           `json:"telegramToken"`
+			TelegramChatID *string           `json:"telegramChatId"`
+			TelegramTopics map[string]string `json:"telegramTopics"`
+			ClaudeAPIKey   *string           `json:"claudeApiKey"`
+			Notify         *NotifyConf       `json:"notify"`
 		}
 		if r.Body != nil {
 			defer r.Body.Close()
@@ -171,6 +177,15 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TelegramChatID != nil {
 			s.Telegram.ChatID = *in.TelegramChatID
+		}
+		if in.TelegramTopics != nil {
+			topics := map[string]string{}
+			for k, v := range in.TelegramTopics {
+				if v != "" {
+					topics[k] = v
+				}
+			}
+			s.Telegram.Topics = topics
 		}
 		if in.ClaudeAPIKey != nil && *in.ClaudeAPIKey != "" {
 			s.ClaudeAPIKey = *in.ClaudeAPIKey

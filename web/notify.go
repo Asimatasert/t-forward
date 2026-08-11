@@ -8,15 +8,20 @@ import (
 	"time"
 )
 
-// sendTelegram posts text to the given chat via the Telegram Bot API. chatID
-// accepts anything the API does: a numeric user/group id, a channel id
-// (-100…), or a public channel's @username, as long as the bot is a member
-// (channels: an admin) there.
-func sendTelegram(token, chatID, text string) error {
+// sendTelegram posts text to the given chat (optionally into one forum topic)
+// via the Telegram Bot API. chatID accepts anything the API does: a numeric
+// user/group id, a channel id (-100…), or a public channel's @username, as
+// long as the bot is a member (channels: an admin) there. An empty threadID
+// posts to the chat's General topic (or a non-forum chat).
+func sendTelegram(token, chatID, threadID, text string) error {
 	if token == "" || chatID == "" {
 		return fmt.Errorf("telegram not configured")
 	}
-	body, err := json.Marshal(map[string]string{"chat_id": chatID, "text": text})
+	payload := map[string]string{"chat_id": chatID, "text": text}
+	if threadID != "" {
+		payload["message_thread_id"] = threadID
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -42,10 +47,11 @@ func sendTelegram(token, chatID, text string) error {
 	return nil
 }
 
-// handleNotifyTest: POST (privileged) — sends a test Telegram message using
-// the request's token/chatId if given (so unsaved settings-modal edits can be
-// tried before Save), falling back to the persisted settings otherwise.
-// Nothing is written to disk here.
+// handleNotifyTest: POST (privileged) — sends a test Telegram message for one
+// notify event, using the request's token/chatId/topicId if given (so unsaved
+// settings-modal edits can be tried before Save), falling back to the
+// persisted settings + that event's configured topic otherwise. Nothing is
+// written to disk here.
 func (a *Actions) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -60,7 +66,16 @@ func (a *Actions) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	if chatID == "" {
 		chatID = s.Telegram.ChatID
 	}
-	if err := sendTelegram(token, chatID, "✅ t-forward test notification"); err != nil {
+	event := body["event"]
+	threadID := body["topicId"]
+	if threadID == "" && event != "" {
+		threadID = s.Telegram.Topics[event]
+	}
+	label := event
+	if label == "" {
+		label = "general"
+	}
+	if err := sendTelegram(token, chatID, threadID, fmt.Sprintf("✅ t-forward test notification (%s)", label)); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
