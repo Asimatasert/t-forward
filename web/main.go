@@ -125,6 +125,7 @@ func main() {
 	// only guards /conf/ while these do the more impactful writes ungated.
 	mux.HandleFunc("/scan/forward", acts.privileged(acts.handleScanForward))
 	mux.HandleFunc("/scan/device", acts.privileged(acts.handleScanDevice))
+	mux.HandleFunc("/notify/test", acts.privileged(acts.handleNotifyTest))
 
 	// ── liveness & version endpoints ───────────────────────────────────────
 	// /healthz is unauthenticated (bypasses tokenMiddleware) so systemd / uptime

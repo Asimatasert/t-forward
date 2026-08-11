@@ -2561,11 +2561,14 @@ async function renderSettings() {
     <div class="set-row"><label>Bot token</label>
       <input type="password" id="set-tgtoken" placeholder="${s.telegramConfigured ? "configured ✓ — blank to keep" : "123456:ABC…"}"></div>
     <div class="set-row"><label>Chat ID</label>
-      <input type="text" id="set-tgchat" value="${esc(s.telegramChatId || "")}" placeholder="e.g. 55512345"></div>
+      <input type="text" id="set-tgchat" value="${esc(s.telegramChatId || "")}" placeholder="e.g. 55512345 (group/channel ids work too)"></div>
+    <div class="set-row"><label></label>
+      <button class="btn" id="set-tgtest" type="button">Send test message</button>
+      <span class="set-msg" id="set-tgtest-msg"></span></div>
 
     <div class="set-sec">Notify on</div>
     <div class="set-toggles">${tog("down", "Tunnel down")}${tog("up", "Tunnel up")}${tog("warn", "Warnings & errors")}${tog("reach", "Reachability change")}</div>
-    <div class="set-hint" style="margin-left:0">Per-VPN / per-host scoping and a test button arrive with the notification engine.</div>
+    <div class="set-hint" style="margin-left:0">Per-VPN / per-host scoping arrives with the notification engine.</div>
 
     <div class="modal-actions">
       <span class="set-msg" id="set-save-msg"></span>
