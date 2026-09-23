@@ -1,0 +1,19 @@
+# Save as conf.d/example.yaml and chmod 600 the file before adding credentials.
+# Run the web daemon with Python 3 installed on its host.
+name: Example emailed-code VPN
+type: vpn
+vpn:
+  server: vpn.example.com
+  protocol: anyconnect
+  user: example-user
+  password: replace-with-vpn-password
+  totp: true
+  totp_imap:
+    host: imap.example.com
+    port: 993
+    user: inbox@example.com
+    password: replace-with-mail-password
+    mailbox: INBOX
+    from_filter: gateway@example.com  # IMAP FROM substring match
+    tls: true                       # false requires STARTTLS (default port 143)
+# IMAP takes precedence over totp_command; manual/webhook entry stays available.

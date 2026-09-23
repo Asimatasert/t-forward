@@ -86,14 +86,15 @@ type confYAML struct {
 	TotpCommand string   `json:"totp_command"`
 
 	VPN *struct {
-		Server     string `json:"server"`
-		Protocol   string `json:"protocol"`
-		User       string `json:"user"`
-		Password   string `json:"password"`
-		Servercert string `json:"servercert"`
-		Authgroup  string `json:"authgroup"`
-		Totp       bool   `json:"totp"`
-		TotpSecret string `json:"totp_secret"`
+		Server     string    `json:"server"`
+		Protocol   string    `json:"protocol"`
+		User       string    `json:"user"`
+		Password   string    `json:"password"`
+		Servercert string    `json:"servercert"`
+		Authgroup  string    `json:"authgroup"`
+		Totp       bool      `json:"totp"`
+		TotpSecret string    `json:"totp_secret"`
+		TotpIMAP   *totpIMAP `json:"totp_imap"`
 	} `json:"vpn"`
 
 	SSH *struct {
