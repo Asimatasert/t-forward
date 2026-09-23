@@ -935,7 +935,7 @@ func (d *Docker) WaitingLoop(ctx context.Context) {
 	}
 }
 
-// maybeAutoCode fires a tunnel's TOTP_COMMAND (if any) exactly once per wait,
+// maybeAutoCode fires a tunnel's IMAP source or TOTP_COMMAND once per wait,
 // extracts a code from its stdout, and hands it to `t-forward code`. This is
 // the no-secret automation hook: the command can read the code from anywhere
 // (a webhook cache, an SMS bridge, a mail fetch) and just print it.
@@ -949,12 +949,22 @@ func (d *Docker) maybeAutoCode(ctx context.Context, tun string) {
 	d.mu.Unlock()
 
 	c, err := readConfYAML(confPath(d.confDir, tun))
-	if err != nil || c == nil || strings.TrimSpace(c.TotpCommand) == "" {
+	if err != nil || c == nil {
+		return
+	}
+	useIMAP := (c.Type == "" || c.Type == "vpn") && c.VPN != nil && c.VPN.Totp &&
+		c.VPN.TotpSecret == "" && c.VPN.TotpIMAP != nil
+	if !useIMAP && strings.TrimSpace(c.TotpCommand) == "" {
+		return
+	}
+	marker := filepath.Join(d.stateDir, "auth-"+slugify(tun), "awaiting_code")
+	waitInfo, statErr := os.Stat(marker)
+	if useIMAP && statErr != nil {
 		return
 	}
 	// totp_command is arbitrary shell run as the daemon user; never auto-execute it
 	// unless the operator explicitly opted in when starting the daemon.
-	if !d.allowTotpCmd {
+	if !useIMAP && !d.allowTotpCmd {
 		d.hub.Broadcast("event", map[string]any{
 			"ts": "", "level": "error", "tun": tun,
 			"msg": "totp_command is set but auto-exec is disabled; start the daemon with -allow-totp-command to enable it",
@@ -963,24 +973,43 @@ func (d *Docker) maybeAutoCode(ctx context.Context, tun string) {
 	}
 	cmdStr := c.TotpCommand
 	go func() {
-		cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		timeout := 45 * time.Second
+		if useIMAP {
+			timeout = 120 * time.Second
+		}
+		cctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		d.hub.Broadcast("event", map[string]any{
-			"ts": "", "level": "auth", "tun": tun, "msg": "TOTP_COMMAND: fetching verification code",
+			"ts": "", "level": "auth", "tun": tun, "msg": "TOTP automation: fetching verification code",
 		})
-		out, err := exec.CommandContext(cctx, "sh", "-c", cmdStr).Output()
+		cmd := exec.CommandContext(cctx, "sh", "-c", cmdStr)
+		if useIMAP {
+			cmd = imapCommand(cctx, c.VPN.TotpIMAP, marker)
+		}
+		out, err := cmd.Output()
 		if err != nil {
 			d.hub.Broadcast("event", map[string]any{
-				"ts": "", "level": "error", "tun": tun, "msg": "TOTP_COMMAND failed: " + err.Error(),
+				"ts": "", "level": "error", "tun": tun, "msg": "TOTP source failed or timed out; manual code entry remains available",
 			})
 			return
 		}
 		code := extractCode(string(out))
 		if code == "" {
 			d.hub.Broadcast("event", map[string]any{
-				"ts": "", "level": "error", "tun": tun, "msg": "TOTP_COMMAND produced no code",
+				"ts": "", "level": "error", "tun": tun, "msg": "TOTP source produced no code",
 			})
 			return
+		}
+		if useIMAP {
+			current, err := os.Stat(marker)
+			if err != nil || !os.SameFile(waitInfo, current) || !waitInfo.ModTime().Equal(current.ModTime()) {
+				return
+			}
+			for _, file := range []string{"code", "ready"} {
+				if _, err := os.Stat(filepath.Join(filepath.Dir(marker), file)); err == nil {
+					return
+				}
+			}
 		}
 		if err := exec.CommandContext(cctx, d.tfPath, "code", tun, code).Run(); err != nil {
 			d.hub.Broadcast("event", map[string]any{

@@ -62,4 +62,10 @@ For `TOTP=true` tunnels the code arrives out-of-band (SMS/mail/Telegram)
   Because it is arbitrary shell run as the daemon user, auto-execution is
   **off unless** the daemon was started with `--allow-totp-command`.
 
-No secret is ever stored — codes are single-use and short-lived.
+- **IMAP** — set `vpn.totp_imap` to poll an inbox automatically. Requires Python 3
+  on the daemon host; no shell-execution flag is needed. See
+  [configuration notes](../docs/CONFIG_NOTES.md#emailed-verification-codes) and
+  [the example](../examples/vpn-imap.example.yaml). The IMAP password stays private;
+  protect the YAML with mode `0600`.
+
+Verification codes are single-use and short-lived.

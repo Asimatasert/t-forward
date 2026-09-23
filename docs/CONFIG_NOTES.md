@@ -34,6 +34,14 @@ vpn:                          # when type: vpn
   authgroup: string           # optional
   totp: bool
   totp_secret: string         # optional base32 -> automatic code
+  totp_imap:                  # optional; web daemon fetches emailed codes
+    host: string
+    port: int                # default 993 (TLS) or 143 (STARTTLS)
+    user: string
+    password: string         # SECRET; protect the YAML with chmod 600
+    mailbox: string          # default INBOX
+    from_filter: string      # optional IMAP FROM substring match
+    tls: bool                # default true: implicit TLS; false: STARTTLS
 
 ssh:                          # when type: ssh
   host: string                # the host you land on (forwards resolve from here)
@@ -67,3 +75,29 @@ only through environment variables read via `strenv()`/`fromjson`, so a crafted
 value can never inject yq syntax, and the sensitive keys (password, servercert,
 totp_secret, ssh key) are never on any editable path. `yq -i` preserves the rest
 of the file, including comments.
+
+## Emailed verification codes
+
+Set `vpn.totp: true` and `vpn.totp_imap` on each VPN that receives emailed codes.
+The web daemon must be running, and its host needs Python 3 (standard library
+only; no pip packages). This uses the same wait hook and `t-forward code` delivery
+as `totp_command`; CLI-only sessions retain manual entry. IMAP takes precedence
+when both sources are configured, and does not require `--allow-totp-command`.
+A configured `totp_secret` continues to use the existing generated-code flow.
+
+The helper polls every 3 seconds for up to 90 seconds (the daemon enforces a
+120-second total timeout). It searches unseen messages, optionally matching
+`from_filter`, and inspects the newest 50 matches first using IMAP UIDs. Arrival
+must be within 30 seconds before the current wait began and no more than 120
+seconds before polling began. It extracts the first standalone 4–8 digit run
+from decoded plain-text or HTML bodies, ignoring attachments and headers.
+Use a dedicated mailbox or sender filter to avoid unrelated numeric messages.
+Messages remain unread. A missing code or failed login leaves manual/webhook
+entry available; a new wait starts a new attempt.
+
+TLS certificates are verified. `tls: false` requires STARTTLS rather than sending
+credentials in plaintext. The password travels to the helper through an anonymous
+stdin pipe, never command arguments, logs, panel responses, or temporary auth
+files. Keep the source YAML mode `0600`, like other password-bearing configs.
+IMAP settings are excluded from the panel's editable whitelist.
+See `examples/vpn-imap.example.yaml`.
