@@ -236,6 +236,10 @@ Unauthenticated liveness probing is available at `GET /healthz` (`200 ok`) for
 systemd or uptime monitoring. The build version can be checked at `GET /version`
 (requires authentication).
 
+VPN, SSH, and local tunnels can be started and stopped from their tunnel or
+host detail panels, including SSH tunnels nested under a jump host. Host actions
+control the whole tunnel; **Tunnel details** opens its status and connection view.
+
 The panel has **two canvases**, switched from the top bar:
 
 **Tunnels** — a live topology map, `YOU → container → target hosts`, with:

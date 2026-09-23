@@ -2109,6 +2109,10 @@ function renderTunnel(el) {
       </div>`;
   })() : "";
 
+  const connection = t.type === "ssh"
+    ? `SSH forwards via ${esc(t.user ? t.user + "@" : "")}${esc(t.sshHost || "(no host)")}`
+    : t.type === "local" ? "Local TCP relays — direct access from the container" : "";
+
   // type only ever drives a CSS class from a fixed whitelist; anything else
   // gets no class (never interpolated raw into the attribute).
   const typeClass = ["vpn", "ssh", "local"].includes(t.type) ? t.type : "";
@@ -2120,12 +2124,13 @@ function renderTunnel(el) {
     ${badges.trim() ? `<div class="sec">Flags</div><div class="badges">${badges}</div>` : ""}
     <div class="sec">Tags <button class="edit" data-edit="tags" title="Edit tags">✎</button></div>
     <div class="ptags">${(t.tags || []).map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
-    ${t.state === "on" && t.tunIP ? `
+    ${t.type === "vpn" && t.state === "on" && t.tunIP ? `
       <div class="sec">On the VPN</div>
       <div class="ports">
         <div class="port-row"><span>our IP</span><span class="kind" style="color:var(--steel)">${esc(t.tunIP)}</span></div>
         ${t.tunSubnet ? `<div class="port-row"><span>subnet</span><span class="kind">${esc(t.tunSubnet)}</span><span class="desc" style="margin-left:6px">hosts here can talk directly</span></div>` : ""}
       </div>` : ""}
+    ${connection ? `<p class="desc">${connection}</p>` : ""}
     ${jumpHtml}
     ${mid}${chart}${ports}${clientsHtml}`;
 
@@ -2170,11 +2175,22 @@ function renderTunnel(el) {
 function renderHost(el, tunId, host) {
   const t = tunnels.find((x) => x.id === tunId);
   if (!t) { sel = { kind: "tunnel" }; return renderTunnel(el); }
+  // Same up/down/retry controls as renderTunnel: a host reached only through a
+  // jump tunnel (nested under its jump-off host on the map) has no
+  // other way to reach that tunnel's container node, so it needs its own action
+  // here rather than forcing the user to switch to Tree view.
+  let hostActions = "";
+  if (t.state === "on") hostActions = `<button class="btn danger-ghost" data-act="down">Down</button>`;
+  else if (t.state === "off") hostActions = `<button class="btn primary" data-act="up">Up</button>`;
+  else if (t.state === "failed") hostActions = `<button class="btn primary" data-act="up">Retry</button>
+    <button class="btn danger-ghost" data-act="down">Clear</button>`;
+  else hostActions = `<button class="btn danger-ghost" data-act="down">Abort</button>`;
   const fwds = (t.forwards || []).filter((f) => f.remote.split(":")[0] === host);
-  const reach = (t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
+  const reach = (t.state === "on" && t.hostUp && Object.prototype.hasOwnProperty.call(t.hostUp, host)) ? t.hostUp[host] : null;
   const note = (t.hostNotes && t.hostNotes[host]) || "";
-  const reachPill = reach === true ? `<span class="pill on">● REACHABLE</span>`
-    : reach === false ? `<span class="pill failed">● UNREACHABLE</span>`
+  const listenerProbe = t.type === "ssh" || t.type === "local";
+  const reachPill = reach === true ? `<span class="pill on">${listenerProbe ? "● LISTENING" : "● REACHABLE"}</span>`
+    : reach === false ? `<span class="pill failed">${listenerProbe ? "● NOT LISTENING" : "● UNREACHABLE"}</span>`
     : `<span class="pill off">? UNKNOWN</span>`;
   const copyVals = [], goVals = [], fwdEdits = [];
   const portsHtml = fwds.length ? `
@@ -2186,9 +2202,11 @@ function renderHost(el, tunId, host) {
         const gidx = uri ? goVals.push(uri) - 1 : -1;
         const fidx = fwdEdits.push([f.remote, f.note || ""]) - 1;
         const fnote = f.note ? ` · <span style="color:var(--copper)">${esc(f.note)}</span>` : "";
-        const pr = (t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
+        const pr = (t.state === "on" && t.portUp && Object.prototype.hasOwnProperty.call(t.portUp, f.remote)) ? t.portUp[f.remote] : null;
         const pc = pr === true ? "var(--ok)" : pr === false ? "var(--danger)" : "var(--faint)";
-        const pt = pr === true ? "reachable through the tunnel" : pr === false ? "blocked / no response through the tunnel" : "reachability unknown";
+        const pt = listenerProbe
+          ? (pr === true ? "forward listener accepts connections" : pr === false ? "forward listener unavailable" : "listener status unknown")
+          : (pr === true ? "reachable through the tunnel" : pr === false ? "blocked / no response through the tunnel" : "reachability unknown");
         return `
         <div class="port-row">
           <span title="${pt}" style="color:${pc};font-size:11px">●</span>
@@ -2201,7 +2219,7 @@ function renderHost(el, tunId, host) {
       }).join("")}
     </div>` : `<p class="desc">no forwards to this host</p>`;
   const hTags = (t.hostTags && t.hostTags[host]) || [];
-  const hostSub = (t.hostSubnets && t.hostSubnets[host]) || "";
+  const hostSub = t.type === "vpn" && t.state === "on" ? (t.hostSubnets && t.hostSubnets[host]) || "" : "";
   const sameSubnet = hostSub && t.tunSubnet && hostSub === t.tunSubnet;
   const subnetHtml = hostSub ? `
     <div class="sec">Subnet</div>
@@ -2213,12 +2231,15 @@ function renderHost(el, tunId, host) {
   el.innerHTML = `
     <h1>${esc(host)} <span class="type-tag">HOST</span></h1>
     <p class="desc" style="color:var(--copper)">${esc(note || "(no name)")} <button class="edit" data-edit="hnote" title="Edit name/note">✎</button></p>
-    <p class="desc">behind <b style="color:var(--text)">${esc(t.id)}</b> · ${esc(t.type)}${t.state === "on" ? "" : " (tunnel down)"}</p>
+    <p class="desc">behind <b style="color:var(--text)">${esc(t.id)}</b> · ${esc(t.type)} · ${esc(t.state)}</p>
     ${reachPill}
+    <div class="panel-actions">${hostActions}<button class="btn" data-act="tunnel">Tunnel details</button></div>
     <div class="sec">Tags <button class="edit" data-edit="htags" title="Edit host tags">✎</button></div>
     <div class="ptags">${hTags.map((x) => `<span class="ptag">#${esc(x)}</span>`).join("") || `<span class="desc">none</span>`}</div>
-    <div class="sec">Reachability (ping via tunnel)</div>
-    <p class="desc">${reach === null ? "checked once the tunnel is up" : reach ? "responds through the tunnel" : "no ping reply through the tunnel"}</p>
+    <div class="sec">${listenerProbe ? "Forward listeners" : "Reachability via tunnel"}</div>
+    <p class="desc">${reach === null ? (t.state === "on" ? "waiting for a reachability check" : "checked once the tunnel is up") : listenerProbe
+      ? (reach ? "a published listener accepts connections; remote service reachability is not verified" : "no published listener accepts connections")
+      : (reach ? "responds through the tunnel" : "no response through the tunnel")}</p>
     ${subnetHtml}
     ${portsHtml}`;
   el.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(copyVals[+b.dataset.copy])));
@@ -2230,6 +2251,12 @@ function renderHost(el, tunId, host) {
   el.querySelectorAll("[data-editfwd]").forEach((b) => b.addEventListener("click", () => {
     const [remote, cur] = fwdEdits[+b.dataset.editfwd];
     editFwdNote(t.id, remote, cur);
+  }));
+  el.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
+    const a = b.dataset.act;
+    if (a === "up") actUp(t.id);
+    else if (a === "down") actDown(t.id);
+    else if (a === "tunnel") { selected = t.id; sel = { kind: "tunnel" }; renderPanel(); }
   }));
 }
 
