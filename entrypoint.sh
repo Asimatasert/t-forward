@@ -1,13 +1,17 @@
 #!/bin/bash
 # t-forward container entrypoint - runs ONE tunnel, of TUNNEL_TYPE:
 #
-#   vpn   : openconnect tunnel, then socat forwards + optional SOCKS proxy
+#   vpn   : openconnect (SSL-VPN) OR strongSwan (IPsec/IKE) tunnel, then socat
+#           forwards + optional SOCKS proxy. VPN_PROTOCOL=ipsec picks strongSwan
+#           (FortiGate dialup: PSK + XAuth); anything else is openconnect.
 #   ssh   : ssh -N tunnel with -L forwards + optional -D SOCKS proxy
 #   local : plain socat forwards + optional SOCKS proxy (no tunnel at all)
 #
 # Contract with the host CLI:
 #   /auth (mounted tmpdir, mode 700) may contain:
 #     password     -> vpn: first stdin line for openconnect; ssh: sshpass file
+#                     ipsec: XAuth password (written into ipsec.secrets)
+#     psk          -> ipsec only: the IKE pre-shared key (ipsec.secrets)
 #     totp_secret  -> vpn only: "base32:<SECRET>" enables automatic TOTP
 #     ssh_key      -> ssh only: private key (copied in by the CLI, mode 600)
 #     code         -> vpn only: written by the host when the user types the code
@@ -18,7 +22,9 @@
 # Environment:
 #   TUNNEL_TYPE                         vpn (default) | ssh | local
 #   VPN_SERVER, VPN_PROTOCOL, VPN_USER  (vpn)
-#   SERVERCERT, AUTHGROUP, TOTP, NO_DTLS (vpn, optional)
+#   SERVERCERT, AUTHGROUP, TOTP, NO_DTLS (vpn openconnect, optional)
+#   IKE_VERSION, IKE_PROPOSAL, ESP_PROPOSAL, IPSEC_IKELIFETIME, IPSEC_LIFETIME,
+#     IPSEC_LOCALID, IPSEC_REMOTEID                (vpn ipsec, optional)
 #   SSH_HOST, SSH_USER, SSH_PORT        (ssh; port defaults to 22)
 #   SSH_JUMP="[user@]host[:port] ..."   (ssh; ordered ProxyJump hops to reach
 #                                        SSH_HOST — needs key auth, not password)
@@ -201,6 +207,144 @@ run_vpn() {
     exit "$rc"
 }
 
+# ------------------------------------------------------------------- ipsec
+
+# strongSwan (charon) IKE/IPsec tunnel — FortiGate "dialup" style: IKEv1 (or v2)
+# with a pre-shared key for the IKE SA plus XAuth (user/password) for the user,
+# and mode-config (leftsourceip=%config) to get a virtual IP. No tun0: charon
+# installs XFRM policies + a route (table 220) so packets to the remote hosts
+# are encrypted transparently, and the existing socat forwards work unchanged.
+run_ipsec() {
+    [ -n "${VPN_SERVER:-}" ] || fail "VPN_SERVER is required"
+    [ -n "${VPN_USER:-}" ]   || fail "VPN_USER is required (XAuth user)"
+    [ -s "$AUTH/password" ]  || fail "/auth/password is missing (XAuth password)"
+    [ -s "$AUTH/psk" ]       || fail "/auth/psk is missing (IKE pre-shared key)"
+
+    local ikev="${IKE_VERSION:-1}"
+    local aggressive=no
+    # IKEv1 FortiGate dialup normally negotiates in aggressive mode (the group
+    # name travels as the ID in the first packet); IKEv2 has no aggressive mode.
+    [ "$ikev" = "1" ] && aggressive=yes
+
+    # Proposals default to the FortiGate defaults seen in the wild (P1: AES256/
+    # SHA256/DH14, P2: AES256/SHA256 + PFS DH5). Override per-tunnel if the
+    # gateway is pickier — a mismatch shows as NO_PROPOSAL_CHOSEN in the log.
+    local ike_prop="${IKE_PROPOSAL:-aes256-sha256-modp2048,aes128-sha256-modp2048}"
+    local esp_prop="${ESP_PROPOSAL:-aes256-sha256-modp1536,aes128-sha256-modp1536}"
+
+    # XAuth password: FortiToken 2FA appends the one-time code to the password.
+    # If TOTP is on we wait for the host to deliver the code (same handoff as the
+    # openconnect path) and concatenate it, matching the FortiClient behaviour.
+    local xpass; xpass=$(cat "$AUTH/password")
+    if [ "${TOTP:-false}" = "true" ] && [ ! -s "$AUTH/totp_secret" ]; then
+        touch "$AUTH/awaiting_code"
+        log "XAuth password set; waiting for verification code from the host"
+        local waited=0 max_wait="$CODE_TIMEOUT"
+        while [ ! -s "$AUTH/code" ]; do
+            waited=$((waited + 1))
+            [ "$waited" -ge "$max_wait" ] && fail "no verification code within ${max_wait}s; aborting"
+            sleep 1
+        done
+        xpass="${xpass}$(cat "$AUTH/code")"
+        rm -f "$AUTH/code" "$AUTH/awaiting_code"
+        log "verification code appended to XAuth password"
+    elif [ -s "$AUTH/totp_secret" ]; then
+        # base32:SECRET -> generate the current TOTP and append it, no host round-trip
+        local secret; secret=$(sed 's/^base32://' "$AUTH/totp_secret")
+        local otp; otp=$(oathtool --totp -b "$secret" 2>/dev/null) \
+            && [ -n "$otp" ] && xpass="${xpass}${otp}" \
+            && log "generated TOTP appended to XAuth password"
+    fi
+
+    # leftid: the Local ID / peer-ID the gateway expects (often the group name).
+    # Empty is fine for most FortiGate dialups (they key on the PSK).
+    local leftid_line="" rightid_line=""
+    [ -n "${IPSEC_LOCALID:-}" ]  && leftid_line="    leftid=${IPSEC_LOCALID}"
+    [ -n "${IPSEC_REMOTEID:-}" ] && rightid_line="    rightid=${IPSEC_REMOTEID}"
+
+    # ipsec.secrets: the PSK (IKE) and the XAuth credential. 0600, root-only.
+    umask 077
+    {
+        printf ': PSK "%s"\n' "$(cat "$AUTH/psk")"
+        printf '%s : XAUTH "%s"\n' "$VPN_USER" "$xpass"
+    } > /etc/ipsec.secrets
+    # psk on disk is now in ipsec.secrets only; drop the mounted copy unless a
+    # restart policy needs it to reconnect after a crash.
+    [ "${KEEP_AUTH:-false}" = "true" ] || rm -f "$AUTH/psk" "$AUTH/password"
+
+    cat > /etc/ipsec.conf <<EOF
+config setup
+    charondebug="ike 1, cfg 1, knl 1"
+
+conn tforward
+    keyexchange=ikev${ikev}
+    aggressive=${aggressive}
+    authby=xauthpsk
+    xauth=client
+    left=%defaultroute
+    leftsourceip=%config
+    leftauth=psk
+    leftauth2=xauth
+${leftid_line}
+    right=${VPN_SERVER}
+    rightauth=psk
+    rightsubnet=0.0.0.0/0
+${rightid_line}
+    xauth_identity=${VPN_USER}
+    ike=${ike_prop}!
+    esp=${esp_prop}!
+    ikelifetime=${IPSEC_IKELIFETIME:-28800s}
+    lifetime=${IPSEC_LIFETIME:-43200s}
+    dpddelay=30s
+    dpdaction=restart
+    closeaction=restart
+    auto=start
+EOF
+
+    log "connecting to $VPN_SERVER (protocol: ipsec/ikev${ikev}, user: $VPN_USER)"
+
+    # charon writes to syslog; in a container there is no syslogd, so run the
+    # starter in nofork+stderr mode and mirror it into OC_LOG for the wait loop.
+    : > "$OC_LOG"
+    ipsec start --nofork > >(tee -a "$OC_LOG") 2>&1 &
+    local ipsec_pid=$!
+
+    # Wait for the CHILD_SA to install. The legacy starter reports it as
+    # "ESTABLISHED"/"INSTALLED"; a rejected XAuth/PSK shows as XAUTH failed or
+    # NO_PROPOSAL_CHOSEN in the mirrored log, which we surface instead of hanging.
+    log "waiting for IPsec SA (max ${TUN_TIMEOUT}s)"
+    local i=0 up=""
+    while [ -z "$up" ]; do
+        kill -0 "$ipsec_pid" 2>/dev/null || fail "charon exited during negotiation"
+        if grep -qiE 'XAUTH authentication failed|AUTHENTICATION_FAILED|authentication failed|INVALID_ID_INFORMATION' "$OC_LOG"; then
+            fail "the VPN rejected the credentials (XAuth/PSK) — check vpn.psk / vpn.user / vpn.password"
+        fi
+        if grep -qi 'NO_PROPOSAL_CHOSEN' "$OC_LOG"; then
+            fail "no matching proposal — set vpn.ike_proposal / vpn.esp_proposal to the gateway's Phase1/Phase2 algorithms"
+        fi
+        # CHILD_SA up: either the starter status or a mirrored "established/INSTALLED"
+        if ipsec status 2>/dev/null | grep -qE 'INSTALLED|ESTABLISHED' \
+           || grep -qiE 'CHILD_SA .* (established|INSTALLED)' "$OC_LOG"; then
+            up=1; break
+        fi
+        i=$((i + 1))
+        [ "$i" -ge "$TUN_TIMEOUT" ] && fail "IPsec tunnel did not come up within ${TUN_TIMEOUT}s"
+        sleep 1
+    done
+
+    local vip; vip=$(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | grep -vE '^(127\.|'"${ETH_IP%.*}"'\.)' | cut -d/ -f1 | head -1)
+    log "IPsec tunnel is up${vip:+ (virtual IP $vip)}"
+
+    start_socat_forwards
+    start_socks
+    mark_ready
+
+    wait "$ipsec_pid"
+    local rc=$?
+    log "charon exited with status $rc"
+    exit "$rc"
+}
+
 # --------------------------------------------------------------------- ssh
 
 run_ssh() {
@@ -306,7 +450,7 @@ run_local() {
 }
 
 case "$TYPE" in
-    vpn)   run_vpn ;;
+    vpn)   [ "${VPN_PROTOCOL:-}" = "ipsec" ] && run_ipsec || run_vpn ;;
     ssh)   run_ssh ;;
     local) run_local ;;
     *)     fail "unsupported TUNNEL_TYPE '$TYPE'" ;;

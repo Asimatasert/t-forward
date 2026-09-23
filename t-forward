@@ -192,6 +192,11 @@ yaml_load() {
     SERVERCERT=$(yqs "$file" .vpn.servercert); AUTHGROUP=$(yqs "$file" .vpn.authgroup)
     TOTP=$(yq -r '.vpn.totp // false' "$file"); TOTP_SECRET=$(yqs "$file" .vpn.totp_secret)
     NO_DTLS=$(yq -r '.vpn.no_dtls // false' "$file")
+    # ipsec (strongSwan) fields — only meaningful when .vpn.protocol == ipsec
+    PSK=$(yqs "$file" .vpn.psk);         IKE_VERSION=$(yqs "$file" .vpn.ikev)
+    IKE_PROPOSAL=$(yqs "$file" .vpn.ike_proposal); ESP_PROPOSAL=$(yqs "$file" .vpn.esp_proposal)
+    IPSEC_LOCALID=$(yqs "$file" .vpn.local_id);    IPSEC_REMOTEID=$(yqs "$file" .vpn.remote_id)
+    IPSEC_IKELIFETIME=$(yqs "$file" .vpn.ike_lifetime); IPSEC_LIFETIME=$(yqs "$file" .vpn.lifetime)
     SSH_HOST=$(yqs "$file" .ssh.host);   SSH_PORT=$(yqs "$file" .ssh.port)
     SSH_USER=$(yqs "$file" .ssh.user);   SSH_KEY=$(yqs "$file" .ssh.key)
     SOCKS=$(yqs "$file" .socks);         RESTART=$(yq -r '.restart // false' "$file")
@@ -234,6 +239,7 @@ load_conf() {
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
     AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
     SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
+    PSK="" IKE_VERSION="" IKE_PROPOSAL="" ESP_PROPOSAL="" IPSEC_LOCALID="" IPSEC_REMOTEID="" IPSEC_IKELIFETIME="" IPSEC_LIFETIME=""
     need_yq
     yaml_load "$file" || return 1
     [ -n "$NAME" ] || NAME=$(conf_name "$file")
@@ -260,6 +266,14 @@ validate_conf() {
             no_dash AUTHGROUP "$AUTHGROUP" || return 1
             case "$PROTOCOL" in
                 fortinet|gp|anyconnect|nc|pulse|f5|array) : ;;
+                ipsec)
+                    # strongSwan path: PSK + XAuth (user already checked above).
+                    # PASSWORD is the XAuth secret; without it XAuth can't complete.
+                    [ -n "$PSK" ] || { warn "$n: ipsec needs vpn.psk (the IKE pre-shared key)"; return 1; }
+                    [ -n "$PASSWORD" ] || { warn "$n: ipsec needs vpn.password (the XAuth password)"; return 1; }
+                    if [ -n "$IKE_VERSION" ] && [ "$IKE_VERSION" != "1" ] && [ "$IKE_VERSION" != "2" ]; then
+                        warn "$n: vpn.ikev must be 1 or 2 ('$IKE_VERSION')"; return 1
+                    fi ;;
                 *) warn "$n: unsupported PROTOCOL '$PROTOCOL'"; return 1 ;;
             esac ;;
         ssh)
@@ -470,6 +484,10 @@ up_one() {
         printf '%s\n' "$PASSWORD" >"$authdir/password"
         chmod 600 "$authdir/password"
     fi
+    if [ "$TYPE" = "vpn" ] && [ "$PROTOCOL" = "ipsec" ] && [ -n "$PSK" ]; then
+        printf '%s' "$PSK" >"$authdir/psk"
+        chmod 600 "$authdir/psk"
+    fi
     if [ "$TYPE" = "vpn" ] && [ -n "$TOTP_SECRET" ]; then
         case "$TOTP_SECRET" in
             base32:*|0x*) printf '%s' "$TOTP_SECRET" >"$authdir/totp_secret" ;;
@@ -512,6 +530,10 @@ up_one() {
             -e VPN_SERVER="$SERVER" -e VPN_PROTOCOL="$PROTOCOL" \
             -e VPN_USER="$VPN_USER" -e SERVERCERT="$SERVERCERT" \
             -e AUTHGROUP="$AUTHGROUP" -e TOTP="$TOTP" -e NO_DTLS="$NO_DTLS" \
+            -e IKE_VERSION="$IKE_VERSION" -e IKE_PROPOSAL="$IKE_PROPOSAL" \
+            -e ESP_PROPOSAL="$ESP_PROPOSAL" -e IPSEC_LOCALID="$IPSEC_LOCALID" \
+            -e IPSEC_REMOTEID="$IPSEC_REMOTEID" -e IPSEC_IKELIFETIME="$IPSEC_IKELIFETIME" \
+            -e IPSEC_LIFETIME="$IPSEC_LIFETIME" \
             -e SSH_HOST="$SSH_HOST" -e SSH_PORT="$SSH_PORT" -e SSH_USER="$SSH_USER" \
             -e SSH_JUMP="$SSH_JUMP" \
             -e FORWARDS="$fwd_spec" -e SOCKS="$socks_enabled" \
@@ -579,6 +601,7 @@ cmd_up() {
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
     AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
     SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
+    PSK="" IKE_VERSION="" IKE_PROPOSAL="" ESP_PROPOSAL="" IPSEC_LOCALID="" IPSEC_REMOTEID="" IPSEC_IKELIFETIME="" IPSEC_LIFETIME=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -907,7 +930,7 @@ EOF
 
 usage() {
     cat <<EOF
-t-forward $VERSION - Docker-based multi-VPN manager (openconnect)
+t-forward $VERSION - Docker-based multi-VPN manager (openconnect + strongSwan)
 
 Usage:
   t-forward                      interactive menu
@@ -935,6 +958,8 @@ Up options:
 Ad-hoc up (no config file), by tunnel type:
   vpn:    --server HOST --user U --protocol P [--servercert PIN]
           [--authgroup G] [--totp] [--totp-secret S] [--no-dtls]
+          ipsec (--protocol ipsec): needs a config file for psk/proposals;
+          see examples/ipsec.example.yaml
   ssh:    --ssh-host HOST --ssh-user U [--ssh-port N] [--ssh-key PATH]
   local:  --type local --name NAME
   common: --password PW --socks PORT|any --name NAME

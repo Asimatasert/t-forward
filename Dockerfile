@@ -10,7 +10,10 @@ RUN apk add --no-cache build-base curl \
 
 FROM alpine:3.20
 
-RUN apk add --no-cache bash openconnect socat iproute2 openssh-client sshpass
+# openconnect -> SSL-VPN (fortinet/gp/anyconnect/...); strongswan -> IPsec/IKE
+# (FortiGate dialup: PSK + XAuth), the two families most hospital gateways speak.
+RUN apk add --no-cache bash openconnect socat iproute2 openssh-client sshpass \
+    strongswan oath-toolkit-oathtool
 
 COPY --from=build /usr/local/bin/microsocks /usr/local/bin/microsocks
 COPY entrypoint.sh /entrypoint.sh
