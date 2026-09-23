@@ -1,0 +1,61 @@
+# t-forward IPsec/IKE VPN definition (strongSwan).
+#
+# Use this instead of the openconnect path when the gateway speaks native IPsec
+# rather than an SSL-VPN portal — e.g. a FortiGate "dialup" tunnel you would set
+# up in the FortiClient IPsec tab (Pre-shared key + XAuth), NOT the SSL-VPN tab.
+#
+# How to tell which one you need:
+#   - The gateway answers on a TCP/HTTPS port (443/8443/10443) -> SSL-VPN, use
+#     protocol: fortinet (see vpn.example.yaml).
+#   - The gateway only answers on UDP 500/4500 and TCP is closed -> IPsec, this file.
+#
+# One YAML file per tunnel in ~/.config/t-forward/conf.d/. Read with yq (never
+# sourced), so values need no shell quoting.
+
+name: Example Hospital IPsec
+type: vpn
+tags: [example, ipsec]
+
+vpn:
+  protocol: ipsec            # <- selects the strongSwan path
+  server: 203.0.113.10       # gateway IP or host (no scheme, no port — IKE is UDP 500/4500)
+  ikev: 1                    # IKE version: 1 (FortiGate dialup default, aggressive mode) or 2
+
+  # --- IKE SA (Phase 1) shared secret ---
+  psk: "the-pre-shared-key"  # the "Pre-shared key" from the FortiClient IPsec tab.
+                             # This is a SHARED tunnel secret, NOT your personal password.
+
+  # --- XAuth (per-user) ---
+  user: you@example.com      # XAuth username
+  password: "your-xauth-pass" # XAuth password. With FortiToken/2FA, see totp below —
+                             #   the one-time code is appended to this password.
+
+  # --- 2FA (FortiToken / TOTP), optional ---
+  totp: false                # true -> wait for a code (SMS/mail/Telegram/panel) and
+                             #         append it to the XAuth password at connect time
+  totp_secret: ""            # optional base32 secret -> code generated locally, no prompt
+
+  # --- Crypto proposals, optional (defaults match common FortiGate settings) ---
+  # Override ONLY if the gateway rejects the defaults (log shows NO_PROPOSAL_CHOSEN).
+  # Format: enc-integ-dhgroup, comma-separated for multiple offers.
+  ike_proposal: "aes256-sha256-modp2048,aes128-sha256-modp2048"   # Phase 1
+  esp_proposal: "aes256-sha256-modp1536,aes128-sha256-modp1536"   # Phase 2 (PFS via the modpXXXX group)
+  # ike_lifetime: 28800s     # Phase 1 SA lifetime (default 28800s / 8h)
+  # lifetime: 43200s         # Phase 2 SA lifetime (default 43200s / 12h)
+  # local_id: ""             # optional Local ID / peer-ID (leftid); usually empty for dialup
+  # remote_id: ""            # optional expected gateway ID (rightid)
+
+socks: 1080                  # optional SOCKS5 proxy port
+
+# Forwards work exactly as in the SSL-VPN case: socat listens on the published
+# side and reaches the remote host through the IPsec policy.
+hosts:
+  - ip: 10.0.0.20
+    name: app server
+    forwards:
+      - { remote: 22,   local: 2222, service: ssh, user: admin }
+      - { remote: 80,   local: 8080, service: http }
+      - { remote: 5432, local: 5432, service: postgres, user: postgres }
+
+subnets:
+  - { cidr: 10.0.0.0/16, label: site LAN, tags: [prod] }

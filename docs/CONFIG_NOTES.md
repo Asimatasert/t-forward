@@ -26,12 +26,12 @@ restart: bool                 # optional, auto-reconnect policy
 totp_command: string          # optional, TOTP automation (wraps `t-forward code`)
 
 vpn:                          # when type: vpn
-  server: string              # [https://]host[:port]
-  protocol: fortinet | gp | anyconnect | nc | pulse | f5 | array
-  user: string
-  password: string            # omit -> prompted at connect
-  servercert: string          # optional pin-sha256
-  authgroup: string           # optional
+  server: string              # [https://]host[:port]  (openconnect);  host  (ipsec, IKE is UDP)
+  protocol: fortinet | gp | anyconnect | nc | pulse | f5 | array | ipsec
+  user: string               # SSL-VPN user, or the XAuth user when protocol: ipsec
+  password: string            # omit -> prompted at connect (SSL-VPN); XAuth password (ipsec)
+  servercert: string          # optional pin-sha256 (openconnect only)
+  authgroup: string           # optional (openconnect only)
   totp: bool
   totp_secret: string         # optional base32 -> automatic code
   totp_imap:                  # optional; web daemon fetches emailed codes
@@ -42,6 +42,15 @@ vpn:                          # when type: vpn
     mailbox: string          # default INBOX
     from_filter: string      # optional IMAP FROM substring match
     tls: bool                # default true: implicit TLS; false: STARTTLS
+  # --- protocol: ipsec (strongSwan) only ---
+  psk: string                 # required: the IKE pre-shared key (shared secret, NOT the user password)
+  ikev: 1 | 2                 # optional, default 1 (FortiGate dialup, aggressive mode); 2 = IKEv2
+  ike_proposal: string        # optional Phase-1 proposals "enc-integ-dhgroup,..." (default matches common FortiGate)
+  esp_proposal: string        # optional Phase-2 proposals (PFS via the modpXXXX group)
+  ike_lifetime: string        # optional Phase-1 SA lifetime (default 28800s)
+  lifetime: string            # optional Phase-2 SA lifetime (default 43200s)
+  local_id: string            # optional Local ID / leftid (usually empty for dialup)
+  remote_id: string           # optional expected gateway ID / rightid
 
 ssh:                          # when type: ssh
   host: string                # the host you land on (forwards resolve from here)

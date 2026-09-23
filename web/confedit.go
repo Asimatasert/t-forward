@@ -12,8 +12,8 @@ import (
 )
 
 // confEdit is the whitelist of things the web UI may change in a conf file.
-// Sensitive keys (the vpn/ssh password, servercert, totp_secret, ssh key) are
-// NEVER in scope — the edits below only ever touch these specific paths.
+// Sensitive keys (the vpn/ssh password, psk, servercert, totp_secret, ssh key)
+// are NEVER in scope — the edits below only ever touch these specific paths.
 type confEdit struct {
 	Name     *string             `json:"name"`     // tunnel display name -> .name
 	Tags     *[]string           `json:"tags"`     // tunnel tags -> .tags

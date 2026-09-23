@@ -31,7 +31,7 @@ One tool, three tunnel types:
 
 | `type` | What runs in the container | Use it for |
 |---|---|---|
-| `vpn` | [openconnect](https://www.infradead.org/openconnect/) (fortinet / gp / anyconnect / …) | corporate & site VPNs, including out-of-band TOTP codes |
+| `vpn` | [openconnect](https://www.infradead.org/openconnect/) (fortinet / gp / anyconnect / …) **or** [strongSwan](https://strongswan.org/) IPsec/IKE (`protocol: ipsec`) | corporate & site VPNs, including out-of-band TOTP codes; SSL-VPN portals *and* native IPsec (FortiGate dialup: PSK + XAuth) |
 | `ssh` | `ssh -N` with `-L` forwards / `-D` SOCKS, optional multi-hop `ProxyJump` | anything behind a bastion / jump host |
 | `local` | plain `socat` relays | pinning a LAN/remote service to a stable localhost port |
 
@@ -75,7 +75,7 @@ Access goes through **published port forwards** and an optional per-tunnel
 |---|---|
 | Host | `bash` ≥ 3.2, `docker` (Docker Desktop / OrbStack / Linux dockerd), `yq` ([mikefarah](https://github.com/mikefarah/yq) v4 — reads the YAML configs) |
 | Web panel (optional) | `go` ≥ 1.21 to build the daemon; `nmap` only for the LAN-discovery canvas |
-| Container image (built for you) | Alpine + `openconnect` + `openssh-client` + `socat` + `microsocks` |
+| Container image (built for you) | Alpine + `openconnect` + `strongswan` + `openssh-client` + `socat` + `microsocks` |
 
 ## Install
 
