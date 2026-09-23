@@ -16,6 +16,17 @@ an optional live web panel that maps your tunnels and even discovers your LAN.
 
 <sub>The web panel's tunnel map (all data shown is synthetic).</sub>
 
+Beyond the **Map**, the panel has two more views:
+
+![t-forward Tree view — collapsible tunnel → subnet → host → forward hierarchy with a per-tunnel detail pane and inspectable published ports](docs/tree-view.png)
+
+<sub>**Tree** view — every tunnel expands to its subnets, hosts, and forwards; the side pane inspects the selected tunnel's published ports (all data synthetic).</sub>
+
+![t-forward LAN view — nmap discovery graph fanning out from each local interface to reachable devices, with per-device open ports](docs/lan-view.png)
+
+<sub>**LAN** view — optional `nmap` discovery: each local interface fans out to the devices it can reach, with their open ports; click a device to forward one (all data synthetic).</sub>
+
+
 One tool, three tunnel types:
 
 | `type` | What runs in the container | Use it for |
