@@ -506,8 +506,12 @@ up_one() {
     # tforward (uid 10001). Only vpn needs more: openconnect / strongSwan create
     # tun0 / XFRM state and routes, so it runs as root with NET_ADMIN + the tun
     # device (unchanged from before). ssh and local get no capabilities at all.
-    local priv_args=()
-    if [ "$TYPE" = "vpn" ]; then
+    # An image built before this change has no USER (it runs as root and its
+    # entrypoint cannot work unprivileged), so keep the old flags for it.
+    local priv_args=() img_user
+    img_user=$(docker image inspect -f '{{.Config.User}}' "$IMAGE" 2>/dev/null)
+    if [ "$TYPE" = "vpn" ] || [ -z "$img_user" ] || [ "$img_user" = "root" ] || [ "$img_user" = "0" ]; then
+        [ "$TYPE" = "vpn" ] || warn "image $IMAGE still runs as root (built before the non-root change); run 't-forward build' to update it"
         priv_args=(--user 0 --cap-add=NET_ADMIN --device /dev/net/tun)
     else
         priv_args=(--user 10001:10001 --cap-drop=ALL --security-opt no-new-privileges)
