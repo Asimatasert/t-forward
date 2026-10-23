@@ -15,8 +15,16 @@ FROM alpine:3.20
 RUN apk add --no-cache bash openconnect socat iproute2 openssh-client sshpass \
     strongswan oath-toolkit-oathtool
 
+# Unprivileged runtime user with a fixed UID/GID, so bind-mount ownership is
+# predictable. The image defaults to it (USER below); only the vpn tunnel type
+# needs root (route/tun setup) and the host CLI starts that one with `--user 0`.
+RUN addgroup -g 10001 -S tforward \
+    && adduser -S -D -u 10001 -G tforward -h /home/tforward -s /sbin/nologin tforward
+
 COPY --from=build /usr/local/bin/microsocks /usr/local/bin/microsocks
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
+
+USER tforward
 
 ENTRYPOINT ["/entrypoint.sh"]
