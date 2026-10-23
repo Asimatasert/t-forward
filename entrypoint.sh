@@ -373,8 +373,12 @@ run_ssh() {
     [ -s "$AUTH/ssh_key" ] || [ -s "$AUTH/password" ] \
         || fail "ssh needs /auth/ssh_key or /auth/password"
 
-    # Work from private copies: the key must be 0600 and owned by the ssh user,
-    # and known_hosts must be writable, which a host bind mount may not allow.
+    # The key is copied to a private 0600 copy owned by the running user: ssh
+    # refuses keys that are group/world readable, and /auth is a host bind mount
+    # whose ownership/permissions we do not control (Linux hosts).
+    # known_hosts is NOT copied: it stays in /auth so the pinned host key survives
+    # a container restart (--restart) - otherwise every reconnect would be a new
+    # trust-on-first-use.
     ( umask 077; mkdir -p "$PRIV_DIR" ) || fail "cannot create $PRIV_DIR"
     chmod 700 "$PRIV_DIR"
     if [ -s "$AUTH/ssh_key" ]; then
@@ -382,22 +386,18 @@ run_ssh() {
             || fail "cannot read $AUTH/ssh_key"
         chmod 600 "$PRIV_DIR/ssh_key"
     fi
-    if [ -s "$AUTH/known_hosts" ]; then
-        cat "$AUTH/known_hosts" > "$PRIV_DIR/known_hosts"
-    else
-        : > "$PRIV_DIR/known_hosts"
-    fi
 
     # StrictHostKeyChecking=accept-new trusts an unseen host key on first contact
     # (trust-on-first-use): convenient, but the first connection cannot detect a
-    # MITM. The known_hosts file is per-run (a private copy), so every fresh tunnel
-    # is a first connection. Pre-seed /auth/known_hosts (or pin the key out of band)
-    # for sensitive hosts to close that window.
+    # MITM. The accepted key is written to /auth/known_hosts and checked on every
+    # later connection (including restarts of a --restart tunnel); a fresh tunnel
+    # is still a first connection. Pre-seed /auth/known_hosts (or pin the key out
+    # of band) for sensitive hosts to close that window.
     local args=(-N -p "${SSH_PORT:-22}"
                 -o ExitOnForwardFailure=yes
                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
                 -o StrictHostKeyChecking=accept-new
-                -o UserKnownHostsFile="$PRIV_DIR/known_hosts")
+                -o UserKnownHostsFile="$AUTH/known_hosts")
     [ -s "$PRIV_DIR/ssh_key" ] && args+=(-i "$PRIV_DIR/ssh_key" -o IdentitiesOnly=yes)
 
     # multi-hop: chain through one or more jump hosts to reach SSH_HOST. ssh's

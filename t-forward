@@ -521,13 +521,20 @@ up_one() {
         # user joins that group (--group-add), the dir becomes 770 and the files
         # 660. $STATE_DIR itself stays 700, so other host users still cannot reach it.
         local host_gid; host_gid=$(id -g)
+        # rootless Docker / userns-remap: container uids are remapped to sub-ids,
+        # so neither uid 10001 nor --group-add <host gid> maps to the host user and
+        # the auth dir would be unreadable. There, container root is the host user
+        # (rootless) or at least the only id the daemon maps - use the gid 0 branch.
+        local sec_opts; sec_opts=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)
+        case "$sec_opts" in *name=rootless*|*name=userns*) host_gid=0 ;; esac
         if [ "$host_gid" != "0" ]; then
             priv_args+=(--group-add "$host_gid")
             chmod 770 "$authdir"
             find "$authdir" -type f -exec chmod 660 {} +
         else
-            # host user is root (gid 0): the 700 auth dir is root-owned, so the
-            # container user has to be root too - but still without capabilities.
+            # host user is root (gid 0), or the daemon is rootless / userns-remapped:
+            # the 700 auth dir is only reachable as container root - but still
+            # without capabilities.
             priv_args=(--user 0 --cap-drop=ALL --security-opt no-new-privileges)
         fi
     fi

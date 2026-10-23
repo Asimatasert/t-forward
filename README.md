@@ -371,10 +371,12 @@ cross-site / JSON-only guard.
 The image runs as an unprivileged user (`tforward`, uid/gid `10001`) by default.
 What each tunnel type gets from the CLI:
 
-| type | container user | capabilities / devices |
-|---|---|---|
-| `ssh`, `local` | `10001:10001` | none (`--cap-drop=ALL`, `no-new-privileges`) |
-| `vpn` (openconnect, strongSwan) | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` |
+| type | situation | container user | capabilities / devices |
+|---|---|---|---|
+| `ssh`, `local` | normal host user | `10001:10001` + host gid | none (`--cap-drop=ALL`, `no-new-privileges`) |
+| `ssh`, `local` | host user is root (gid 0), rootless Docker or `userns-remap` | root (`--user 0`) | none (`--cap-drop=ALL`, `no-new-privileges`) |
+| `ssh`, `local` | image built before this change (no `USER`) | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` (old behaviour; run `t-forward build`) |
+| `vpn` (openconnect, strongSwan) | any | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` |
 
 `vpn` must stay root: openconnect/charon create `tun0` or XFRM state and install
 routes. If you start the image by hand for a vpn tunnel, pass
@@ -384,8 +386,19 @@ namespace), never on the host.
 
 For `ssh`/`local` the host auth dir (`$STATE_DIR/auth-<name>`) is shared with the
 container user through the host user's primary group (`--group-add`; dir `770`,
-files `660`), and the entrypoint works from private `0600` copies of the key and
-`known_hosts`. `$STATE_DIR` itself stays `700`.
+files `660`). The entrypoint works from a private `0600` copy of the ssh key;
+`known_hosts` stays in the auth dir, so a pinned host key survives `--restart`
+restarts. `$STATE_DIR` itself stays `700`.
+
+**Rootless Docker / `userns-remap`:** container uids are remapped to sub-ids, so
+neither uid `10001` nor the host gid reaches the host-owned auth dir. The CLI
+detects this (`docker info` security options contain `rootless` / `userns`) and
+runs `ssh`/`local` as container root instead - still with all capabilities
+dropped. (Not verified on a real rootless/userns-remap daemon.)
+
+The CLI version is unchanged: an older CLI with this image (or this CLI with an
+older image) falls back to the root behaviour above; run `t-forward build` to
+update the image.
 
 ## Security notes
 
