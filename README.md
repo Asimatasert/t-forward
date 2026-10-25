@@ -271,7 +271,11 @@ one or more interfaces and the daemon uses `nmap` to map reachable devices and
 their open ports, on an interval, cached (memory + a JSON file, optionally
 Redis via `redis-cli`). Features:
 - root scan (ARP + SYN, fast, resolves MACs) when a `NOPASSWD` sudoers entry for
-  nmap exists, otherwise an unprivileged connect-scan — no root required;
+  nmap exists, otherwise an unprivileged connect-scan — no root required. Be
+  aware that `NOPASSWD: nmap` is **root-equivalent** (`nmap --script` /
+  `--interactive` run arbitrary commands), so anyone who controls the daemon's
+  user gets root. Only grant it on a dedicated, single-purpose host; the
+  default connect-scan needs nothing;
 - text + port filters; scan events in the console;
 - per-device **name/tags**, keyed by a stable identity (MAC when known, else IP),
   persisted and re-applied on every scan;
@@ -419,6 +423,17 @@ Update the CLI and run `t-forward build` together.
   `.gitignore` excludes real config directories. Keep them out of version control.
 - Panel config edits are whitelisted and injection-safe, and never modify the
   password / servercert / totp_secret / ssh key.
+- The admin PIN (settings / config writes) must be at least 6 characters. It is
+  stored as a salted PBKDF2 hash, unlocking issues a random 8-hour session
+  (never the PIN itself in the cookie), and repeated wrong PINs lock the unlock
+  endpoint out with an increasing delay. Hashes written by older versions are
+  upgraded on the next successful unlock.
+- The local SOCKS5 proxy (`socks:`) has no authentication and is published on
+  `127.0.0.1`: every user/process on that host can use it to reach the tunnel's
+  network. Fine on a single-user workstation; on a shared host, don't enable it.
+- Whoever can start containers (Docker socket access) is effectively root on the
+  host, and so is the web daemon's user. Run the daemon as a dedicated account
+  and treat its compromise as a host compromise.
 
 ## Contributing
 
