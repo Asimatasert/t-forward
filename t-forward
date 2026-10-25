@@ -502,6 +502,44 @@ up_one() {
         chmod 600 "$authdir/ssh_key"
     fi
 
+    # --- container privileges. The image's default user is the unprivileged
+    # tforward (uid 10001). Only vpn needs more: openconnect / strongSwan create
+    # tun0 / XFRM state and routes, so it runs as root with NET_ADMIN + the tun
+    # device (unchanged from before). ssh and local get no capabilities at all.
+    # An image built before this change has no USER (it runs as root and its
+    # entrypoint cannot work unprivileged), so keep the old flags for it.
+    local priv_args=() img_user
+    img_user=$(docker image inspect -f '{{.Config.User}}' "$IMAGE" 2>/dev/null)
+    if [ "$TYPE" = "vpn" ] || [ -z "$img_user" ] || [ "$img_user" = "root" ] || [ "$img_user" = "0" ]; then
+        [ "$TYPE" = "vpn" ] || warn "image $IMAGE still runs as root (built before the non-root change); run 't-forward build' to update it"
+        priv_args=(--user 0 --cap-add=NET_ADMIN --device /dev/net/tun)
+    else
+        priv_args=(--user 10001:10001 --cap-drop=ALL --security-opt no-new-privileges)
+        # The auth dir is created by (and owned by) the host user with mode 700,
+        # which uid 10001 cannot enter on a Linux host. Share it with the host
+        # user's primary group instead of opening it to everyone: the container
+        # user joins that group (--group-add), the dir becomes 770 and the files
+        # 660. $STATE_DIR itself stays 700, so other host users still cannot reach it.
+        local host_gid; host_gid=$(id -g)
+        # rootless Docker: container uids are remapped to sub-ids, so neither uid
+        # 10001 nor --group-add <host gid> maps to the host user and the auth dir
+        # would be unreadable. There, container root is the host user - use the
+        # gid 0 branch. userns-remap is not supported (it was not on main either);
+        # the name=userns match is kept as-is and is untested.
+        local sec_opts; sec_opts=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)
+        case "$sec_opts" in *name=rootless*|*name=userns*) host_gid=0 ;; esac
+        if [ "$host_gid" != "0" ]; then
+            priv_args+=(--group-add "$host_gid")
+            chmod 770 "$authdir"
+            find "$authdir" -type f -exec chmod 660 {} +
+        else
+            # host user is root (gid 0), or the daemon is rootless (or userns, untested):
+            # the 700 auth dir is only reachable as container root - but still
+            # without capabilities.
+            priv_args=(--user 0 --cap-drop=ALL --security-opt no-new-privileges)
+        fi
+    fi
+
     # --- private network per VPN: containers can never reach each other
     docker network inspect "$netname" >/dev/null 2>&1 \
         || docker network create --label "$LABEL=1" "$netname" >/dev/null \
@@ -522,7 +560,7 @@ up_one() {
     info "Connecting '$name' ($target)..."
     local cid
     if ! cid=$(docker run -d --name "$cname" --network "$netname" \
-            --cap-add=NET_ADMIN --device /dev/net/tun \
+            "${priv_args[@]}" \
             -v "$authdir:/auth" \
             -l "$LABEL=1" -l "$LABEL.name=$name" -l "$LABEL.type=$TYPE" \
             -l "$LABEL.tags=$TAGS" \

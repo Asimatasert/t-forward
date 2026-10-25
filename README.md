@@ -47,7 +47,8 @@ you, for free:
   on the far side of a tunnel can reach them.
 - **Host DNS untouched** — a VPN's DNS applies only inside its container (forward
   targets resolve through it), so Tailscale / mDNS / your resolver never break.
-- **No sudo on the host** — openconnect gets root inside the container only.
+- **No sudo on the host** — only `vpn` tunnels get root, and only inside the
+  container (see [Privileges](#privileges)).
 - **Concurrent tunnels** — bring up as many as you like at once.
 
 Access goes through **published port forwards** and an optional per-tunnel
@@ -66,6 +67,7 @@ Access goes through **published port forwards** and an optional per-tunnel
 - [Unattended / server mode](#unattended--server-mode)
 - [Web panel](#web-panel)
 - [Architecture](#architecture)
+- [Privileges](#privileges)
 - [Security notes](#security-notes)
 - [License](#license)
 
@@ -291,7 +293,7 @@ What `t-forward up office` actually does, start to finish:
 ```mermaid
 flowchart TD
     A["t-forward up office"] --> B["① read office.yaml (yq)<br/>write creds → /auth (tmpdir 700;<br/>password / totp_secret / ssh_key each 600)"]
-    B --> C["② docker run tf-office<br/>own network · NET_ADMIN · /dev/net/tun<br/>-v /auth · -p host:port · non-secret env only"]
+    B --> C["② docker run tf-office<br/>own network · NET_ADMIN + /dev/net/tun (vpn only; ssh/local run as uid 10001, no caps)<br/>-v /auth · -p host:port · non-secret env only"]
     C --> D["③ entrypoint: openconnect<br/>← password over a stdin FIFO (never in ps/env)"]
     D --> E{"totp?"}
     E -- "no" --> G["④ tun0 comes up"]
@@ -363,6 +365,48 @@ variables — so a crafted value can't inject yq/shell syntax — and never touc
 credential keys. It binds loopback with a token by default; `--no-auth` is for a
 trusted private bind (e.g. a tailnet IP), still behind a Host-header /
 cross-site / JSON-only guard.
+
+## Privileges
+
+The image runs as an unprivileged user (`tforward`, uid/gid `10001`) by default.
+What each tunnel type gets from the CLI:
+
+| type | situation | container user | capabilities / devices |
+|---|---|---|---|
+| `ssh`, `local` | normal host user | `10001:10001` + host gid | none (`--cap-drop=ALL`, `no-new-privileges`) |
+| `ssh`, `local` | host user is root (gid 0) or rootless Docker | root (`--user 0`) | none (`--cap-drop=ALL`, `no-new-privileges`) |
+| `ssh`, `local` | image built before this change (no `USER`) | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` (old behaviour; run `t-forward build`) |
+| `vpn` (openconnect, strongSwan) | any | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` |
+
+`vpn` must stay root: openconnect/charon create `tun0` or XFRM state and install
+routes. If you start the image by hand for a vpn tunnel, pass
+`--user 0 --cap-add NET_ADMIN --device /dev/net/tun`; without them the entrypoint
+stops with a clear error. Root exists only inside that container (own network
+namespace), never on the host.
+
+For `ssh`/`local` the host auth dir (`$STATE_DIR/auth-<name>`) is shared with the
+container user through the host user's primary group (`--group-add`; dir `770`,
+files `660`). The entrypoint works from a private `0600` copy of the ssh key;
+`known_hosts` stays in the auth dir, so a pinned host key survives `--restart`
+restarts. `$STATE_DIR` itself stays `700`.
+
+**Rootless Docker:** container uids are remapped to sub-ids, so neither uid
+`10001` nor the host gid reaches the host-owned auth dir. The CLI detects this
+(`docker info` security options contain `rootless`) and runs `ssh`/`local` as
+container root instead - still with all capabilities dropped. (Not verified on a
+real rootless daemon.) `userns-remap` is **not supported** (it was not on `main`
+either): the CLI also takes the root path when it sees `userns`, but this is
+untested and the host-owned auth dir may still be unreadable there.
+
+The CLI version is unchanged, so old and new CLI/image can be mixed:
+
+- this CLI + an older image: falls back to the root behaviour above.
+- an older CLI + this image: the old CLI passes no `--user`, so `ssh`/`local`
+  start as uid `10001` with `NET_ADMIN` and `/dev/net/tun` and no `--group-add`.
+  On Linux this can stop with "/auth is missing or not writable" until the CLI
+  is updated.
+
+Update the CLI and run `t-forward build` together.
 
 ## Security notes
 

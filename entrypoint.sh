@@ -19,6 +19,12 @@
 #     awaiting_code -> vpn only: tells the host to prompt the user for a code
 #     ready         -> tunnel is up and all forwards/proxy are running
 #
+# Privileges:
+#   The image runs as the unprivileged user tforward (uid 10001). ssh and local
+#   need nothing more. vpn (openconnect / strongSwan) must create tun0 / XFRM
+#   state and routes, so the host CLI starts it with `--user 0 --cap-add
+#   NET_ADMIN --device /dev/net/tun` (see README "Privileges").
+#
 # Environment:
 #   TUNNEL_TYPE                         vpn (default) | ssh | local
 #   VPN_SERVER, VPN_PROTOCOL, VPN_USER  (vpn)
@@ -36,6 +42,10 @@
 set -u
 
 AUTH=/auth
+# private (700) scratch dir owned by the running user: ssh refuses keys that are
+# group/world readable or owned by someone else, and /auth is a host bind mount
+# whose ownership/permissions we do not control (Linux hosts).
+PRIV_DIR="${HOME:-/tmp}/.tforward"
 PIPE=/run/authpipe
 OC_LOG=/run/openconnect.log
 TYPE="${TUNNEL_TYPE:-vpn}"
@@ -67,6 +77,15 @@ auth_rejected() {
     grep -qE "^Password:" "$OC_LOG"
 }
 
+# vpn needs root (tun0 / XFRM / routes); say so plainly instead of failing later
+# with an obscure openconnect/charon error when run as the default user.
+if [ "$TYPE" = "vpn" ] && [ "$(id -u)" != "0" ]; then
+    fail "vpn mode needs root: run with --user 0 --cap-add NET_ADMIN --device /dev/net/tun (the t-forward CLI does this)"
+fi
+# every mode drops marker files into /auth; fail early when it is not writable
+[ -d "$AUTH" ] && [ -w "$AUTH" ] \
+    || fail "$AUTH is missing or not writable by uid $(id -u) (mount the auth dir there)"
+
 # stale leftovers from a previous run of this container (restart policy)
 rm -f "$AUTH/ready" "$AUTH/awaiting_code" "$AUTH/code" "$PIPE"
 
@@ -97,7 +116,8 @@ start_socks() {
 
 mark_ready() {
     if [ "${KEEP_AUTH:-false}" != "true" ]; then
-        rm -f "$AUTH/password" "$AUTH/totp_secret" "$AUTH/ssh_key" "$AUTH/code"
+        rm -f "$AUTH/password" "$AUTH/totp_secret" "$AUTH/ssh_key" "$AUTH/code" \
+              "$PRIV_DIR/ssh_key"
     fi
     touch "$AUTH/ready"
     log "READY"
@@ -353,17 +373,32 @@ run_ssh() {
     [ -s "$AUTH/ssh_key" ] || [ -s "$AUTH/password" ] \
         || fail "ssh needs /auth/ssh_key or /auth/password"
 
+    # The key is copied to a private 0600 copy owned by the running user: ssh
+    # refuses keys that are group/world readable, and /auth is a host bind mount
+    # whose ownership/permissions we do not control (Linux hosts).
+    # known_hosts is NOT copied: it stays in /auth so the pinned host key survives
+    # a container restart (--restart) - otherwise every reconnect would be a new
+    # trust-on-first-use.
+    ( umask 077; mkdir -p "$PRIV_DIR" ) || fail "cannot create $PRIV_DIR"
+    chmod 700 "$PRIV_DIR"
+    if [ -s "$AUTH/ssh_key" ]; then
+        ( umask 077; cat "$AUTH/ssh_key" > "$PRIV_DIR/ssh_key" ) \
+            || fail "cannot read $AUTH/ssh_key"
+        chmod 600 "$PRIV_DIR/ssh_key"
+    fi
+
     # StrictHostKeyChecking=accept-new trusts an unseen host key on first contact
     # (trust-on-first-use): convenient, but the first connection cannot detect a
-    # MITM. The known_hosts file is per-run (under /auth), so every fresh tunnel is
-    # a first connection. Pre-seed /auth/known_hosts (or pin the key out of band)
-    # for sensitive hosts to close that window.
+    # MITM. The accepted key is written to /auth/known_hosts and checked on every
+    # later connection (including restarts of a --restart tunnel); a fresh tunnel
+    # is still a first connection. Pre-seed /auth/known_hosts (or pin the key out
+    # of band) for sensitive hosts to close that window.
     local args=(-N -p "${SSH_PORT:-22}"
                 -o ExitOnForwardFailure=yes
                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
                 -o StrictHostKeyChecking=accept-new
                 -o UserKnownHostsFile="$AUTH/known_hosts")
-    [ -s "$AUTH/ssh_key" ] && args+=(-i "$AUTH/ssh_key" -o IdentitiesOnly=yes)
+    [ -s "$PRIV_DIR/ssh_key" ] && args+=(-i "$PRIV_DIR/ssh_key" -o IdentitiesOnly=yes)
 
     # multi-hop: chain through one or more jump hosts to reach SSH_HOST. ssh's
     # ProxyJump (-J) applies the same key/known-hosts options to every hop, so
