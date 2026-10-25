@@ -42,6 +42,9 @@ type Actions struct {
 	// (settings.json, panel-layout.json) so concurrent POSTs can't interleave.
 	mu sync.Mutex
 
+	// gate holds admin sessions and the failed-PIN lockout (see admin.go).
+	gate adminGate
+
 	// baseCtx is the daemon-lifetime context (set once in main before serving).
 	// Tunnel mutations (up/down/code) run on it, NOT the HTTP request context, so
 	// a client disconnect mid-request doesn't SIGKILL the CLI partway through.

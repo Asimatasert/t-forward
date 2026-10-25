@@ -27,7 +27,7 @@ var version = "dev"
 
 func main() {
 	var (
-		addr         = flag.String("addr", "127.0.0.1:8787", "listen address (127.0.0.1 only)")
+		addr         = flag.String("addr", "127.0.0.1:8787", "listen address (loopback by default; a non-loopback bind serves plain HTTP, so use it only on a trusted private network such as a tailnet)")
 		tokenFile    = flag.String("token-file", "", "path to a file containing the auth token (preferred over argv; default: TF_WEB_TOKEN env or random)")
 		tfPath       = flag.String("tf", "t-forward", "path to the t-forward CLI")
 		configDir    = flag.String("config-dir", defaultConfigDir(), "t-forward config directory")
