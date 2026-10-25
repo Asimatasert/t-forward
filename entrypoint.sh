@@ -186,6 +186,21 @@ run_vpn() {
     #     connection learns the pin and hands it to the host (learned_servercert);
     #     the CLI stores it outside the auth dir and passes it back as SERVERCERT
     #     from then on, so a changed certificate is rejected, not re-trusted.
+    #
+    # In restart mode the container is started again with the same env (no
+    # SERVERCERT yet) and the auth dir survives, so a pin learned by an earlier
+    # start is picked up from $AUTH/learned_servercert and enforced instead of
+    # probing again - otherwise every restart would re-trust whatever the
+    # network presents.
+    if [ -z "${SERVERCERT:-}" ] && [ "${SERVERCERT_TOFU:-false}" = "true" ] \
+        && [ ! -L "$AUTH/learned_servercert" ] && [ -s "$AUTH/learned_servercert" ]; then
+        local learned
+        learned=$(head -n 1 "$AUTH/learned_servercert")
+        if [[ "$learned" =~ ^pin-sha256:[A-Za-z0-9+/=]+$ ]]; then
+            SERVERCERT="$learned"
+            log "tofu: enforcing the pin learned earlier ($SERVERCERT); a changed certificate is rejected"
+        fi
+    fi
     if [ -z "${SERVERCERT:-}" ] && [ "${SERVERCERT_TOFU:-false}" = "true" ]; then
         log "tofu: no servercert pinned yet; learning the server certificate pin…"
         SERVERCERT=$(timeout 25 openconnect --protocol="$VPN_PROTOCOL" "$VPN_SERVER" \

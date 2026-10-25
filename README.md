@@ -212,7 +212,9 @@ Options that smooth over real-world gateways:
     gateway's pin and stores it in `~/.config/t-forward/pins/<name>` (outside the
     auth dir, mode 600). From then on that pin is enforced, so a changed
     certificate is **rejected** instead of silently re-trusted; delete the file to
-    learn again. The very first connection cannot detect a man-in-the-middle, so
+    learn again. With `restart: true` the learned pin is also kept across the
+    container's automatic restarts, so a reboot or crash never re-trusts a changed
+    certificate. The very first connection cannot detect a man-in-the-middle, so
     use `servercert` where you can verify the pin first. Only meaningful for
     gateways with a self-signed/private certificate (a CA-signed one is verified
     normally and nothing is pinned).
