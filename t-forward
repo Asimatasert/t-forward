@@ -843,6 +843,18 @@ cmd_code() {
         i=$((i + 1)); sleep 1
     done
     info "'$n' still negotiating; check 't-forward status'"
+    # Keep watching quietly so a slow tunnel still gets its pin and ssh host
+    # keys stored once it is up (bounded by the connect timeout; the container
+    # leaving the running state ends it earlier).
+    (
+        j=0
+        while [ "$j" -lt "$CONNECT_TIMEOUT" ]; do
+            if [ -e "$authdir/ready" ]; then persist_trust "$n" "$authdir" >/dev/null 2>&1; exit 0; fi
+            [ "$(container_state "$cname")" = "running" ] || exit 0
+            j=$((j + 1)); sleep 1
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
 }
 
 # tail and level-tag container logs (conn/tunnel/auth/error), like the daemon
