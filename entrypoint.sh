@@ -147,6 +147,26 @@ port_listening() {
 
 # --------------------------------------------------------------------- vpn
 
+# ipsec_field_ok NAME VALUE ERE - fail unless VALUE matches the whole-value ERE.
+# An empty value is fine only when the ERE allows it.
+ipsec_field_ok() {
+    printf '%s' "$2" | LC_ALL=C grep -Eq -- "$3" 2>/dev/null && [[ "$2" != *[[:cntrl:]]* ]] \
+        || fail "invalid $1 for ipsec (control characters, quotes or an unexpected format are not allowed)"
+}
+
+# ipsec_quote LABEL SECRET -> IPSEC_QUOTED. strongSwan reads "..." or '...' with
+# no escape sequences, so pick the delimiter the secret does not contain.
+ipsec_quote() {
+    [[ "$2" != *[[:cntrl:]]* ]] || fail "$1 contains a line break or control character"
+    case "$2" in
+        *\"*) case "$2" in
+                  *\'*) fail "$1 contains both ' and \" which ipsec.secrets cannot represent" ;;
+              esac
+              IPSEC_QUOTED="'$2'" ;;
+        *)    IPSEC_QUOTED="\"$2\"" ;;
+    esac
+}
+
 run_vpn() {
     [ -n "${VPN_SERVER:-}" ] || fail "VPN_SERVER is required"
     [ -n "${VPN_PROTOCOL:-}" ] || fail "VPN_PROTOCOL is required"
@@ -302,6 +322,22 @@ run_ipsec() {
             && log "generated TOTP appended to XAuth password"
     fi
 
+    # ipsec.conf / ipsec.secrets are line-oriented: a value with a line break would
+    # add its own directive (e.g. leftupdown=<command>, which charon runs as
+    # root). Everything interpolated below is checked first.
+    ipsec_field_ok VPN_SERVER "$VPN_SERVER" '^[^[:cntrl:]"[:space:]]+$'
+    ipsec_field_ok VPN_USER "$VPN_USER" '^[^[:cntrl:]"]+$'
+    [ -z "${IPSEC_LOCALID:-}" ] || ipsec_field_ok IPSEC_LOCALID "$IPSEC_LOCALID" '^[^[:cntrl:]"]+$'
+    [ -z "${IPSEC_REMOTEID:-}" ] || ipsec_field_ok IPSEC_REMOTEID "$IPSEC_REMOTEID" '^[^[:cntrl:]"]+$'
+    ipsec_field_ok IKE_VERSION "$ikev" '^[12]$'
+    ipsec_field_ok IKE_PROPOSAL "$ike_prop" '^[A-Za-z0-9_,-]+$'
+    ipsec_field_ok ESP_PROPOSAL "$esp_prop" '^[A-Za-z0-9_,-]+$'
+    ipsec_field_ok IPSEC_IKELIFETIME "${IPSEC_IKELIFETIME:-28800s}" '^[0-9]+[smhd]?$'
+    ipsec_field_ok IPSEC_LIFETIME "${IPSEC_LIFETIME:-43200s}" '^[0-9]+[smhd]?$'
+    local psk_q xpass_q
+    ipsec_quote PSK "$(cat "$AUTH/psk")"; psk_q=$IPSEC_QUOTED
+    ipsec_quote "XAuth password" "$xpass"; xpass_q=$IPSEC_QUOTED
+
     # leftid: the Local ID / peer-ID the gateway expects (often the group name).
     # Empty is fine for most FortiGate dialups (they key on the PSK).
     local leftid_line="" rightid_line=""
@@ -311,8 +347,8 @@ run_ipsec() {
     # ipsec.secrets: the PSK (IKE) and the XAuth credential. 0600, root-only.
     umask 077
     {
-        printf ': PSK "%s"\n' "$(cat "$AUTH/psk")"
-        printf '%s : XAUTH "%s"\n' "$VPN_USER" "$xpass"
+        printf ': PSK %s\n' "$psk_q"
+        printf '%s : XAUTH %s\n' "$VPN_USER" "$xpass_q"
     } > /etc/ipsec.secrets
     # psk on disk is now in ipsec.secrets only; drop the mounted copy unless a
     # restart policy needs it to reconnect after a crash.

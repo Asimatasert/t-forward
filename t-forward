@@ -275,7 +275,27 @@ validate_conf() {
                     [ -n "$PASSWORD" ] || { warn "$n: ipsec needs vpn.password (the XAuth password)"; return 1; }
                     if [ -n "$IKE_VERSION" ] && [ "$IKE_VERSION" != "1" ] && [ "$IKE_VERSION" != "2" ]; then
                         warn "$n: vpn.ikev must be 1 or 2 ('$IKE_VERSION')"; return 1
-                    fi ;;
+                    fi
+                    # These land in ipsec.conf / ipsec.secrets, which are
+                    # line-oriented: reject line breaks and quotes, and hold
+                    # proposals / lifetimes to a strict format.
+                    match_field() { # NAME VALUE ERE
+                        [[ "$2" != *[[:cntrl:]]* ]] && printf '%s' "$2" | grep -Eq -- "$3" \
+                            || { warn "$n: invalid vpn.$1 for ipsec"; return 1; }
+                    }
+                    match_field server "$SERVER" '^[^[:space:]"]+$' || return 1
+                    match_field user "$VPN_USER" '^[^"]+$' || return 1
+                    [ -z "$IPSEC_LOCALID" ] || match_field local_id "$IPSEC_LOCALID" '^[^"]+$' || return 1
+                    [ -z "$IPSEC_REMOTEID" ] || match_field remote_id "$IPSEC_REMOTEID" '^[^"]+$' || return 1
+                    [ -z "$IKE_PROPOSAL" ] || match_field ike_proposal "$IKE_PROPOSAL" '^[A-Za-z0-9_,-]+$' || return 1
+                    [ -z "$ESP_PROPOSAL" ] || match_field esp_proposal "$ESP_PROPOSAL" '^[A-Za-z0-9_,-]+$' || return 1
+                    [ -z "$IPSEC_IKELIFETIME" ] || match_field ike_lifetime "$IPSEC_IKELIFETIME" '^[0-9]+[smhd]?$' || return 1
+                    [ -z "$IPSEC_LIFETIME" ] || match_field lifetime "$IPSEC_LIFETIME" '^[0-9]+[smhd]?$' || return 1
+                    case "$PASSWORD$PSK" in
+                        *[[:cntrl:]]*) warn "$n: ipsec psk/password must not contain line breaks"; return 1 ;;
+                    esac
+                    case "$PSK" in *\"*\'*|*\'*\"*) warn "$n: ipsec psk cannot contain both ' and \""; return 1 ;; esac
+                    case "$PASSWORD" in *\"*\'*|*\'*\"*) warn "$n: ipsec password cannot contain both ' and \""; return 1 ;; esac ;;
                 *) warn "$n: unsupported PROTOCOL '$PROTOCOL'"; return 1 ;;
             esac ;;
         ssh)
@@ -699,6 +719,21 @@ up_one() {
 
 # ----------------------------------------------------------------- commands
 
+# first line of a secret file (for --password-file etc.); warns when the file is
+# readable by other users
+read_secret_file() {
+    local f=$1 line mode
+    [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ] || die "cannot read secret file: ${f:-<empty>}"
+    mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)
+    case "$mode" in
+        ''|400|600) : ;;
+        *) warn "$f has mode $mode; a secret file should be 600" ;;
+    esac
+    IFS= read -r line <"$f" || true
+    [ -n "$line" ] || die "secret file is empty: $f"
+    printf '%s' "$line"
+}
+
 cmd_up() {
     local names=() adhoc="" a_forwards=() f cli_restart="" cli_tags="" cli_noprompt=""
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
@@ -717,12 +752,19 @@ cmd_up() {
             --ssh-port)   SSH_PORT=$2; shift 2 ;;
             --ssh-key)    SSH_KEY=$2; shift 2 ;;
             --ssh-jump)   SSH_JUMP=$2; shift 2 ;;
-            --password)   PASSWORD=$2; shift 2 ;;
+            --password)   warn "--password puts the secret in the process list and shell history; prefer --password-file PATH or --password-stdin"
+                          PASSWORD=$2; shift 2 ;;
+            --password-file) PASSWORD=$(read_secret_file "$2") || exit 1; shift 2 ;;
+            --password-stdin) IFS= read -r PASSWORD || true
+                          [ -n "$PASSWORD" ] || die "--password-stdin: no password on stdin"
+                          shift ;;
             --servercert) SERVERCERT=$2; shift 2 ;;
             --tofu)       TOFU=true; shift ;;
             --authgroup)  AUTHGROUP=$2; shift 2 ;;
             --totp)       TOTP=true; shift ;;
-            --totp-secret) TOTP_SECRET=$2; shift 2 ;;
+            --totp-secret) warn "--totp-secret puts the secret in the process list and shell history; prefer --totp-secret-file PATH"
+                          TOTP_SECRET=$2; shift 2 ;;
+            --totp-secret-file) TOTP_SECRET=$(read_secret_file "$2") || exit 1; shift 2 ;;
             --no-dtls)    NO_DTLS=true; shift ;;
             --socks)      SOCKS=$2; shift 2 ;;
             --name)       NAME=$2; shift 2 ;;
@@ -1061,12 +1103,13 @@ Up options:
 
 Ad-hoc up (no config file), by tunnel type:
   vpn:    --server HOST --user U --protocol P [--servercert PIN | --tofu]
-          [--authgroup G] [--totp] [--totp-secret S] [--no-dtls]
+          [--authgroup G] [--totp] [--totp-secret-file PATH] [--no-dtls]
           ipsec (--protocol ipsec): needs a config file for psk/proposals;
           see examples/ipsec.example.yaml
   ssh:    --ssh-host HOST --ssh-user U [--ssh-port N] [--ssh-key PATH]
   local:  --type local --name NAME
-  common: --password PW --socks PORT|any --name NAME
+  common: --password-file PATH | --password-stdin   (--password PW is visible
+          in 'ps' and shell history) --socks PORT|any --name NAME
           --forward LOCAL:RHOST:RPORT   (repeatable)
 
 Config: one YAML file per tunnel in $CONF_D/<name>.yaml
