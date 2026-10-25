@@ -28,10 +28,11 @@
 # Environment:
 #   TUNNEL_TYPE                         vpn (default) | ssh | local
 #   VPN_SERVER, VPN_PROTOCOL, VPN_USER  (vpn)
-#   SERVERCERT, AUTHGROUP, TOTP, NO_DTLS (vpn openconnect, optional)
+#   SERVERCERT, SERVERCERT_TOFU, AUTHGROUP, TOTP, NO_DTLS (vpn openconnect, optional)
 #   IKE_VERSION, IKE_PROPOSAL, ESP_PROPOSAL, IPSEC_IKELIFETIME, IPSEC_LIFETIME,
 #     IPSEC_LOCALID, IPSEC_REMOTEID                (vpn ipsec, optional)
 #   SSH_HOST, SSH_USER, SSH_PORT        (ssh; port defaults to 22)
+#   SSH_STRICT_HOST_KEY=true|false      (ssh; refuse a never-seen host key)
 #   SSH_JUMP="[user@]host[:port] ..."   (ssh; ordered ProxyJump hops to reach
 #                                        SSH_HOST — needs key auth, not password)
 #   FORWARDS="lport|rhost|rport;..."    (container-internal listen ports)
@@ -75,6 +76,23 @@ auth_rejected() {
     [ -s "$OC_LOG" ] || return 1
     grep -qiE "login failed|authentication failed|permission denied|unexpected 512 result|access denied" "$OC_LOG" && return 0
     grep -qE "^Password:" "$OC_LOG"
+}
+
+# openconnect refused the gateway certificate (not CA-trusted, or it does not
+# match the pin). It then asks "accept?" on stdin, which is our password pipe,
+# so without this check the failure looks like a generic auth problem.
+cert_rejected() {
+    [ -s "$OC_LOG" ] || return 1
+    grep -qiE "failed verification|enter 'yes' to accept|specified via --servercert match" "$OC_LOG"
+}
+
+fail_cert_rejected() {
+    local seen
+    seen=$(grep -oE "server's certificate: pin-sha256:[A-Za-z0-9+/=]+" "$OC_LOG" 2>/dev/null | head -1 | sed 's/^server.s certificate: //')
+    if [ -n "${SERVERCERT:-}" ]; then
+        fail "the server certificate does not match the pinned vpn.servercert (pinned $SERVERCERT${seen:+, server presented $seen}). If the gateway legitimately changed its certificate, update vpn.servercert (or delete the stored pin of a vpn.tofu tunnel: pins/<name> in the config dir); otherwise this may be a man-in-the-middle."
+    fi
+    fail "the server certificate is not trusted by a public CA. For a gateway with a self-signed or private-CA certificate set vpn.servercert (pin-sha256:...), or opt in to trust-on-first-use with vpn.tofu: true."
 }
 
 # vpn needs root (tun0 / XFRM / routes); say so plainly instead of failing later
@@ -137,23 +155,29 @@ run_vpn() {
 
     mkfifo "$PIPE"
 
-    # No pinned servercert -> probe the server once to learn its current
-    # certificate pin and trust it (Trust-On-First-Use). openconnect prints the
-    # pin when the cert isn't already trusted; --non-inter makes it abort instead
-    # of prompting. This avoids re-pinning by hand every time the VPN rotates its
-    # cert, at the cost of MITM protection (same as accepting the cert manually).
-    if [ -z "${SERVERCERT:-}" ]; then
-        log "no servercert pinned; probing the server certificate…"
+    # Server identity. By default openconnect verifies the gateway certificate
+    # against the system CA store and refuses anything else - an attacker on the
+    # path cannot get a self-signed certificate accepted, so the password is
+    # never sent to them. A gateway with a self-signed / private-CA certificate
+    # needs one of:
+    #   - SERVERCERT (vpn.servercert): an explicit pin-sha256 (also the stored pin
+    #     the host CLI passes in after a TOFU run), enforced on every connect;
+    #   - SERVERCERT_TOFU=true (vpn.tofu): opt-in trust-on-first-use. The first
+    #     connection learns the pin and hands it to the host (learned_servercert);
+    #     the CLI stores it outside the auth dir and passes it back as SERVERCERT
+    #     from then on, so a changed certificate is rejected, not re-trusted.
+    if [ -z "${SERVERCERT:-}" ] && [ "${SERVERCERT_TOFU:-false}" = "true" ]; then
+        log "tofu: no servercert pinned yet; learning the server certificate pin…"
         SERVERCERT=$(timeout 25 openconnect --protocol="$VPN_PROTOCOL" "$VPN_SERVER" \
             --user="$VPN_USER" --non-inter </dev/null 2>&1 \
             | grep -oE 'pin-sha256:[A-Za-z0-9+/=]+' | head -1)
         if [ -n "$SERVERCERT" ]; then
-            log "auto-detected servercert $SERVERCERT (not pre-pinned)"
-            log "SECURITY: trust-on-first-use — this run trusts whatever certificate the"
-            log "  server presented and CANNOT detect a first-connection MITM. Pin it in"
-            log "  the config (vpn.servercert: $SERVERCERT) to close that window."
+            log "SECURITY: trust-on-first-use - trusting $SERVERCERT for this and later"
+            log "  connections. This first connection cannot detect a MITM; verify the pin"
+            log "  out of band, or set it as vpn.servercert in the config."
+            ( umask 077; printf '%s\n' "$SERVERCERT" > "$AUTH/learned_servercert" )
         else
-            log "no pin printed (certificate is CA-trusted or probe failed)"
+            log "tofu: no pin printed (the certificate is CA-trusted, or the probe failed)"
         fi
     fi
 
@@ -194,7 +218,8 @@ run_vpn() {
         # ran `t-forward code`) self-terminates instead of blocking forever.
         local waited=0 max_wait="$CODE_TIMEOUT"
         while [ ! -s "$AUTH/code" ]; do
-            kill -0 "$oc_pid" 2>/dev/null || fail "openconnect exited during authentication"
+            cert_rejected && fail_cert_rejected
+            kill -0 "$oc_pid" 2>/dev/null || { sleep 1; cert_rejected && fail_cert_rejected; fail "openconnect exited during authentication"; }
             auth_rejected && fail "the VPN rejected the credentials (wrong password?) — check vpn.password in the config"
             waited=$((waited + 1))
             [ "$waited" -ge "$max_wait" ] && fail "no verification code within ${max_wait}s; aborting"
@@ -209,7 +234,8 @@ run_vpn() {
     log "waiting for tunnel interface (max ${TUN_TIMEOUT}s)"
     local i=0
     while ! ip -4 addr show tun0 2>/dev/null | grep -q inet; do
-        kill -0 "$oc_pid" 2>/dev/null || fail "openconnect exited (authentication failed?)"
+        cert_rejected && fail_cert_rejected
+        kill -0 "$oc_pid" 2>/dev/null || { sleep 1; cert_rejected && fail_cert_rejected; fail "openconnect exited (authentication failed?)"; }
         auth_rejected && fail "the VPN rejected the credentials (wrong password?) — check vpn.password in the config"
         i=$((i + 1))
         [ "$i" -ge "$TUN_TIMEOUT" ] && fail "tunnel did not come up within ${TUN_TIMEOUT}s"
@@ -387,16 +413,23 @@ run_ssh() {
         chmod 600 "$PRIV_DIR/ssh_key"
     fi
 
-    # StrictHostKeyChecking=accept-new trusts an unseen host key on first contact
-    # (trust-on-first-use): convenient, but the first connection cannot detect a
-    # MITM. The accepted key is written to /auth/known_hosts and checked on every
-    # later connection (including restarts of a --restart tunnel); a fresh tunnel
-    # is still a first connection. Pre-seed /auth/known_hosts (or pin the key out
-    # of band) for sensitive hosts to close that window.
+    # Host key verification. The host CLI seeds /auth/known_hosts from its
+    # persistent store (outside the auth dir, so it survives every `up`) and
+    # saves it back once the tunnel is up. StrictHostKeyChecking=accept-new
+    # trusts a host key only the FIRST time it is ever seen; afterwards a changed
+    # key is refused (ssh exits), also across restarts of a --restart tunnel.
+    # SSH_STRICT_HOST_KEY=true (ssh.strict_host_key) drops even that first-use
+    # trust: the key must already be in known_hosts (pre-seed it out of band).
+    local hkc=accept-new
+    if [ "${SSH_STRICT_HOST_KEY:-false}" = "true" ]; then
+        hkc=yes
+        [ -s "$AUTH/known_hosts" ] \
+            || fail "ssh.strict_host_key is on but no known host key is stored for this tunnel: add the server's key to known_hosts/<name> in the config dir (ssh-keyscan -p PORT HOST), or turn strict_host_key off"
+    fi
     local args=(-N -p "${SSH_PORT:-22}"
                 -o ExitOnForwardFailure=yes
                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
-                -o StrictHostKeyChecking=accept-new
+                -o StrictHostKeyChecking="$hkc"
                 -o UserKnownHostsFile="$AUTH/known_hosts")
     [ -s "$PRIV_DIR/ssh_key" ] && args+=(-i "$PRIV_DIR/ssh_key" -o IdentitiesOnly=yes)
 
@@ -444,19 +477,27 @@ run_ssh() {
     fi
 
     log "connecting to ${SSH_USER}@${SSH_HOST}:${SSH_PORT:-22}"
-    local ssh_pid
+    local ssh_pid ssh_log="$PRIV_DIR/ssh.log"
+    : > "$ssh_log"
+    # stderr is mirrored into a file so a host-key refusal can be reported as such
     if [ -s "$AUTH/ssh_key" ]; then
-        ssh -o BatchMode=yes "${args[@]}" "${SSH_USER}@${SSH_HOST}" &
+        ssh -o BatchMode=yes "${args[@]}" "${SSH_USER}@${SSH_HOST}" 2> >(tee -a "$ssh_log" >&2) &
         ssh_pid=$!
     else
-        sshpass -f "$AUTH/password" ssh "${args[@]}" "${SSH_USER}@${SSH_HOST}" &
+        sshpass -f "$AUTH/password" ssh "${args[@]}" "${SSH_USER}@${SSH_HOST}" 2> >(tee -a "$ssh_log" >&2) &
         ssh_pid=$!
     fi
 
     # ssh binds its -L/-D listeners only after successful authentication
     local i=0
     while [ -n "$probe" ] && ! port_listening "$probe"; do
-        kill -0 "$ssh_pid" 2>/dev/null || fail "ssh exited (authentication failed?)"
+        if ! kill -0 "$ssh_pid" 2>/dev/null; then
+            sleep 1   # let the mirrored stderr land in the file
+            if grep -qE "REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed" "$ssh_log"; then
+                fail "the ssh host key for ${SSH_HOST} changed or is not trusted (see the ssh output above). If the server was legitimately rebuilt, remove its line from known_hosts/<name> in the config dir; otherwise this may be a man-in-the-middle."
+            fi
+            fail "ssh exited (authentication failed?)"
+        fi
         i=$((i + 1))
         [ "$i" -ge "$TUN_TIMEOUT" ] && fail "ssh did not come up within ${TUN_TIMEOUT}s"
         sleep 1

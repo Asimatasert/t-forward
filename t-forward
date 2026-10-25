@@ -190,6 +190,8 @@ yaml_load() {
     SERVER=$(yqs "$file" .vpn.server);   PROTOCOL=$(yqs "$file" .vpn.protocol)
     VPN_USER=$(yqs "$file" .vpn.user);   PASSWORD=$(yqs "$file" .vpn.password)
     SERVERCERT=$(yqs "$file" .vpn.servercert); AUTHGROUP=$(yqs "$file" .vpn.authgroup)
+    TOFU=$(yq -r '.vpn.tofu // false' "$file")
+    SSH_STRICT=$(yq -r '.ssh.strict_host_key // false' "$file")
     TOTP=$(yq -r '.vpn.totp // false' "$file"); TOTP_SECRET=$(yqs "$file" .vpn.totp_secret)
     NO_DTLS=$(yq -r '.vpn.no_dtls // false' "$file")
     # ipsec (strongSwan) fields — only meaningful when .vpn.protocol == ipsec
@@ -237,7 +239,7 @@ yaml_load() {
 load_conf() {
     local file=$1
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
-    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
+    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false TOFU=false SSH_STRICT=false
     SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
     PSK="" IKE_VERSION="" IKE_PROPOSAL="" ESP_PROPOSAL="" IPSEC_LOCALID="" IPSEC_REMOTEID="" IPSEC_IKELIFETIME="" IPSEC_LIFETIME=""
     need_yq
@@ -305,6 +307,45 @@ network_of()   { printf '%s%s' "$NET_PREFIX" "$(slugify "$1")"; }
 
 container_state() {
     docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null
+}
+
+# ---- server identity that must outlive an `up` (kept OUTSIDE the auth dir,
+# which is wiped on every connect):
+#   $CONFIG_DIR/pins/<name>         openconnect certificate pin learned with vpn.tofu
+#   $CONFIG_DIR/known_hosts/<name>  ssh known_hosts for the tunnel
+trust_file() { printf '%s/%s/%s' "$CONFIG_DIR" "$1" "$(slugify "$2")"; }
+
+# write $1 (a file path) atomically from stdin, mode 600, in a 700 directory
+write_private_file() {
+    local dest=$1 dir tmp
+    dir=$(dirname "$dest")
+    mkdir -p "$dir" && chmod 700 "$dir" || return 1
+    tmp=$(umask 077; mktemp "$dir/.tmp.XXXXXX") || return 1
+    if cat >"$tmp" && mv -f "$tmp" "$dest"; then return 0; fi
+    rm -f "$tmp"; return 1
+}
+
+# store what a connected tunnel learned: the TOFU certificate pin and the ssh
+# host key file. Called only once the tunnel is up (a failed login must not
+# pin a host).
+persist_trust() {
+    local name=$1 authdir=$2 f pin
+    f="$authdir/learned_servercert"
+    if [ -f "$f" ] && [ ! -L "$f" ]; then
+        pin=$(head -n 1 "$f" 2>/dev/null)
+        if printf '%s' "$pin" | grep -Eq '^pin-sha256:[A-Za-z0-9+/=]+$'; then
+            if printf '%s\n' "$pin" | write_private_file "$(trust_file pins "$name")"; then
+                info "  pinned    $pin (trust-on-first-use; stored in the config dir, delete pins/$(slugify "$name") to learn again)"
+            else
+                warn "could not store the learned certificate pin for '$name'"
+            fi
+        fi
+    fi
+    f="$authdir/known_hosts"
+    if [ -s "$f" ] && [ ! -L "$f" ]; then
+        write_private_file "$(trust_file known_hosts "$name")" <"$f" \
+            || warn "could not store the ssh host keys for '$name'"
+    fi
 }
 
 remove_connection() {
@@ -502,6 +543,28 @@ up_one() {
         chmod 600 "$authdir/ssh_key"
     fi
 
+    # --- server identity carried across connects (the auth dir is rebuilt above)
+    local tofu_env=false pinfile kh_store
+    if [ "$TYPE" = "vpn" ] && [ "$PROTOCOL" != "ipsec" ] && [ -z "$SERVERCERT" ]; then
+        pinfile=$(trust_file pins "$name")
+        if [ -f "$pinfile" ] && [ ! -L "$pinfile" ] \
+           && grep -Eq '^pin-sha256:[A-Za-z0-9+/=]+$' "$pinfile"; then
+            # a pin learned earlier with vpn.tofu is enforced from now on
+            SERVERCERT=$(head -n 1 "$pinfile")
+            info "Using the stored certificate pin for '$name' ($SERVERCERT)"
+        elif [ "$TOFU" = "true" ]; then
+            tofu_env=true
+        fi
+    fi
+    if [ "$TYPE" = "ssh" ]; then
+        # seed known_hosts from the persistent store so a host key accepted once
+        # is checked on every later connection
+        kh_store=$(trust_file known_hosts "$name")
+        if [ -f "$kh_store" ] && [ ! -L "$kh_store" ]; then
+            cp "$kh_store" "$authdir/known_hosts" && chmod 600 "$authdir/known_hosts"
+        fi
+    fi
+
     # --- container privileges. The image's default user is the unprivileged
     # tforward (uid 10001). Only vpn needs more: openconnect / strongSwan create
     # tun0 / XFRM state and routes, so it runs as root with NET_ADMIN + the tun
@@ -568,6 +631,7 @@ up_one() {
             -e VPN_SERVER="$SERVER" -e VPN_PROTOCOL="$PROTOCOL" \
             -e VPN_USER="$VPN_USER" -e SERVERCERT="$SERVERCERT" \
             -e AUTHGROUP="$AUTHGROUP" -e TOTP="$TOTP" -e NO_DTLS="$NO_DTLS" \
+            -e SERVERCERT_TOFU="$tofu_env" -e SSH_STRICT_HOST_KEY="$SSH_STRICT" \
             -e IKE_VERSION="$IKE_VERSION" -e IKE_PROPOSAL="$IKE_PROPOSAL" \
             -e ESP_PROPOSAL="$ESP_PROPOSAL" -e IPSEC_LOCALID="$IPSEC_LOCALID" \
             -e IPSEC_REMOTEID="$IPSEC_REMOTEID" -e IPSEC_IKELIFETIME="$IPSEC_IKELIFETIME" \
@@ -588,6 +652,7 @@ up_one() {
     while :; do
         if [ -e "$authdir/ready" ]; then
             info "Connected: '$name'"
+            persist_trust "$name" "$authdir"
             print_summary "$cname" "$socks_enabled" "$fwd_spec"
             if [ "$RESTART" = "true" ]; then
                 info "  restart  unless-stopped (reconnects after crash/reboot)"
@@ -637,7 +702,7 @@ up_one() {
 cmd_up() {
     local names=() adhoc="" a_forwards=() f cli_restart="" cli_tags="" cli_noprompt=""
     NAME="" TYPE=vpn SERVER="" PROTOCOL="" VPN_USER="" PASSWORD="" SERVERCERT=""
-    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false
+    AUTHGROUP="" TOTP=false TOTP_SECRET="" FORWARDS="" SOCKS="" RESTART=false TOFU=false SSH_STRICT=false
     SSH_HOST="" SSH_PORT="" SSH_USER="" SSH_KEY="" SSH_JUMP="" TAGS="" NOPROMPT="" NO_DTLS=false
     PSK="" IKE_VERSION="" IKE_PROPOSAL="" ESP_PROPOSAL="" IPSEC_LOCALID="" IPSEC_REMOTEID="" IPSEC_IKELIFETIME="" IPSEC_LIFETIME=""
 
@@ -654,6 +719,7 @@ cmd_up() {
             --ssh-jump)   SSH_JUMP=$2; shift 2 ;;
             --password)   PASSWORD=$2; shift 2 ;;
             --servercert) SERVERCERT=$2; shift 2 ;;
+            --tofu)       TOFU=true; shift ;;
             --authgroup)  AUTHGROUP=$2; shift 2 ;;
             --totp)       TOTP=true; shift ;;
             --totp-secret) TOTP_SECRET=$2; shift 2 ;;
@@ -730,7 +796,7 @@ cmd_code() {
     # brief confirmation that the tunnel came up
     local i=0
     while [ "$i" -lt 20 ]; do
-        [ -e "$authdir/ready" ] && { info "'$n' connected"; return 0; }
+        [ -e "$authdir/ready" ] && { persist_trust "$n" "$authdir"; info "'$n' connected"; return 0; }
         [ "$(container_state "$cname")" = "running" ] || { warn "'$n' exited after code; check 't-forward logs $n'"; return 1; }
         i=$((i + 1)); sleep 1
     done
@@ -994,7 +1060,7 @@ Up options:
   --tags "a b c"                 attach tags (also settable via TAGS= in conf)
 
 Ad-hoc up (no config file), by tunnel type:
-  vpn:    --server HOST --user U --protocol P [--servercert PIN]
+  vpn:    --server HOST --user U --protocol P [--servercert PIN | --tofu]
           [--authgroup G] [--totp] [--totp-secret S] [--no-dtls]
           ipsec (--protocol ipsec): needs a config file for psk/proposals;
           see examples/ipsec.example.yaml
@@ -1005,9 +1071,10 @@ Ad-hoc up (no config file), by tunnel type:
 
 Config: one YAML file per tunnel in $CONF_D/<name>.yaml
   TYPE=vpn|ssh|local             (default vpn)
-  vpn:    SERVER= PROTOCOL= VPN_USER= PASSWORD= SERVERCERT= AUTHGROUP=
+  vpn:    SERVER= PROTOCOL= VPN_USER= PASSWORD= SERVERCERT= TOFU=true|false AUTHGROUP=
           TOTP=true|false TOTP_SECRET= NO_DTLS=true|false
   ssh:    SSH_HOST= SSH_USER= SSH_PORT= SSH_KEY=~/.ssh/id_x  (or PASSWORD=)
+          STRICT_HOST_KEY=true|false
   common: SOCKS=PORT|any RESTART=true|false TAGS="a b c"
           HOSTS=( "IP | note | RPORT:LPORT[@service] ..." )  # one host per line
           (legacy: FORWARDS="LOCAL:RHOST:RPORT ..." still accepted)
