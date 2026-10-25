@@ -3,10 +3,33 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
+
+// telegramAPI is the Bot API origin; a variable so tests can point it at a
+// closed local port without touching the network.
+var telegramAPI = "https://api.telegram.org"
+
+// scrubTelegramErr strips the bot token from a transport error. The token is
+// part of the request URL (…/bot<TOKEN>/sendMessage), and net/http's *url.Error
+// prints that full URL — the message is then broadcast to every panel client
+// and kept in the event ring, so it must never carry the secret.
+func scrubTelegramErr(err error, token string) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	msg := err.Error()
+	if token != "" {
+		msg = strings.ReplaceAll(msg, token, "***")
+	}
+	return fmt.Errorf("telegram request failed: %s", msg)
+}
 
 // sendTelegram posts text to the given chat (optionally into one forum topic)
 // via the Telegram Bot API. chatID accepts anything the API does: a numeric
@@ -27,11 +50,11 @@ func sendTelegram(token, chatID, threadID, text string) error {
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Post(
-		"https://api.telegram.org/bot"+token+"/sendMessage",
+		telegramAPI+"/bot"+token+"/sendMessage",
 		"application/json", bytes.NewReader(body),
 	)
 	if err != nil {
-		return err
+		return scrubTelegramErr(err, token)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
