@@ -374,7 +374,7 @@ What each tunnel type gets from the CLI:
 | type | situation | container user | capabilities / devices |
 |---|---|---|---|
 | `ssh`, `local` | normal host user | `10001:10001` + host gid | none (`--cap-drop=ALL`, `no-new-privileges`) |
-| `ssh`, `local` | host user is root (gid 0), rootless Docker or `userns-remap` | root (`--user 0`) | none (`--cap-drop=ALL`, `no-new-privileges`) |
+| `ssh`, `local` | host user is root (gid 0) or rootless Docker | root (`--user 0`) | none (`--cap-drop=ALL`, `no-new-privileges`) |
 | `ssh`, `local` | image built before this change (no `USER`) | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` (old behaviour; run `t-forward build`) |
 | `vpn` (openconnect, strongSwan) | any | root (`--user 0`) | `NET_ADMIN` + `/dev/net/tun` |
 
@@ -390,15 +390,23 @@ files `660`). The entrypoint works from a private `0600` copy of the ssh key;
 `known_hosts` stays in the auth dir, so a pinned host key survives `--restart`
 restarts. `$STATE_DIR` itself stays `700`.
 
-**Rootless Docker / `userns-remap`:** container uids are remapped to sub-ids, so
-neither uid `10001` nor the host gid reaches the host-owned auth dir. The CLI
-detects this (`docker info` security options contain `rootless` / `userns`) and
-runs `ssh`/`local` as container root instead - still with all capabilities
-dropped. (Not verified on a real rootless/userns-remap daemon.)
+**Rootless Docker:** container uids are remapped to sub-ids, so neither uid
+`10001` nor the host gid reaches the host-owned auth dir. The CLI detects this
+(`docker info` security options contain `rootless`) and runs `ssh`/`local` as
+container root instead - still with all capabilities dropped. (Not verified on a
+real rootless daemon.) `userns-remap` is **not supported** (it was not on `main`
+either): the CLI also takes the root path when it sees `userns`, but this is
+untested and the host-owned auth dir may still be unreadable there.
 
-The CLI version is unchanged: an older CLI with this image (or this CLI with an
-older image) falls back to the root behaviour above; run `t-forward build` to
-update the image.
+The CLI version is unchanged, so old and new CLI/image can be mixed:
+
+- this CLI + an older image: falls back to the root behaviour above.
+- an older CLI + this image: the old CLI passes no `--user`, so `ssh`/`local`
+  start as uid `10001` with `NET_ADMIN` and `/dev/net/tun` and no `--group-add`.
+  On Linux this can stop with "/auth is missing or not writable" until the CLI
+  is updated.
+
+Update the CLI and run `t-forward build` together.
 
 ## Security notes
 
