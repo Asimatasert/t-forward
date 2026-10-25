@@ -11,10 +11,13 @@ vpn:
   protocol: fortinet              # fortinet | gp | anyconnect | nc | pulse | f5 | array
   user: username1
   password: password1             # omit -> prompted at connect time
-  servercert: pin-sha256:...      # optional; on a mismatch the log prints the real pin.
-                                  # empty/omitted -> the current pin is probed and trusted
-                                  # automatically (survives cert rotation, but no MITM
-                                  # protection — pin it to lock the identity down)
+  servercert: pin-sha256:...      # optional pin, enforced on every connect. A mismatch (or a
+                                  # self-signed gateway with no pin) is refused, and the error
+                                  # shows the pin the server presented.
+  # tofu: true                    # optional, for a self-signed gateway: learn the pin on the
+                                  # first successful connect, store it in pins/NAME and enforce
+                                  # it afterwards (that first connect has no MITM protection,
+                                  # so prefer servercert when you can verify the pin first)
   authgroup: ""                   # optional
   totp: false                     # true -> prompted for a code after the password is
                                   #         sent (the SMS / mail / Telegram flow)

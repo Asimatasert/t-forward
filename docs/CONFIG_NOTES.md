@@ -30,7 +30,8 @@ vpn:                          # when type: vpn
   protocol: fortinet | gp | anyconnect | nc | pulse | f5 | array | ipsec
   user: string               # SSL-VPN user, or the XAuth user when protocol: ipsec
   password: string            # omit -> prompted at connect (SSL-VPN); XAuth password (ipsec)
-  servercert: string          # optional pin-sha256 (openconnect only)
+  servercert: string          # optional pin-sha256 (openconnect only); enforced on every connect
+  tofu: bool                  # optional (openconnect): learn + store the pin on first connect, enforce afterwards
   authgroup: string           # optional (openconnect only)
   totp: bool
   totp_secret: string         # optional base32 -> automatic code
