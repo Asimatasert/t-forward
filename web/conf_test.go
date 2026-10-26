@@ -364,12 +364,15 @@ func TestCloneForwardsNil(t *testing.T) {
 	}
 }
 
-// The panel does `t.forwards.length` / `t.forwards.filter(...)` without a null
-// guard (web/panel/index.html), and tunnelFromConf seeds Forwards with an empty
-// non-nil slice, so the clone must keep it non-nil to marshal as [] not null.
+// tunnelFromConf seeds Forwards with an empty non-nil slice and its error path
+// returns [], so the clone should keep it non-nil: /state would otherwise serve
+// "forwards":null for a conf without forwards (inconsistent API contract). The
+// panel normalizes via applyState (`forwards: s.forwards || []`), so there is
+// no visible error today.
 func TestCloneForwardsKeepsEmptySliceNonNil(t *testing.T) {
-	t.Skip("BUG: cloneForwards turns an empty non-nil Forwards into nil, so a conf without " +
-		"forwards is served as \"forwards\":null and the panel's t.forwards.length throws")
+	t.Skip("BUG (low): cloneForwards turns an empty non-nil Forwards into nil, so /state serves " +
+		"\"forwards\":null for a conf without forwards while the error path returns []; " +
+		"the panel normalizes via applyState, so there is no visible error")
 	cp := cloneForwards(Tunnel{Forwards: []Forward{}})
 	b, _ := json.Marshal(cp)
 	var m map[string]json.RawMessage
