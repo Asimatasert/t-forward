@@ -129,6 +129,7 @@ ssh:
   host: 10.0.0.30             # the host you land on; forwards resolve from here
   user: username1
   key: ~/.ssh/id_ed25519      # key auth (required when `jump` is set); omit for a password prompt
+  # strict_host_key: true     # optional: refuse a never-seen host key (pre-seed known_hosts/<name>)
   jump: [10.0.0.10]           # ordered hops before `host`: you -> 10.0.0.10 -> 10.0.0.30
 hosts:
   - { ip: 10.0.0.40, name: db, forwards: [ { remote: 5432, local: 5433, service: postgres } ] }
@@ -198,12 +199,25 @@ code prompt — so a wrong credential never masquerades as “still waiting”.
 
 ## Connecting to awkward gateways (vpn)
 
-Two options smooth over real-world gateways:
+Options that smooth over real-world gateways:
 
-- **`servercert:` empty / omitted** → the current certificate pin is probed once
-  and trusted (trust-on-first-use). Survives a gateway rotating its cert without
-  re-pinning by hand; pin it explicitly to close the first-connection MITM window
-  (the log prints the exact pin to paste).
+- **Certificate trust (openconnect).** By default the gateway certificate must be
+  valid for a public CA, exactly like a browser: a self-signed or private-CA
+  gateway is refused with an error that tells you what to set, and your password
+  is never sent. For such a gateway, pick one:
+  - `servercert: pin-sha256:...` — pin the certificate. This is enforced on every
+    connect; a different certificate is refused. (A failed connect prints the pin
+    the server presented, so you can copy it after checking it out of band.)
+  - `tofu: true` — trust on first use: the first successful connect learns the
+    gateway's pin and stores it in `~/.config/t-forward/pins/<name>` (outside the
+    auth dir, mode 600). From then on that pin is enforced, so a changed
+    certificate is **rejected** instead of silently re-trusted; delete the file to
+    learn again. With `restart: true` the learned pin is also kept across the
+    container's automatic restarts, so a reboot or crash never re-trusts a changed
+    certificate. The very first connection cannot detect a man-in-the-middle, so
+    use `servercert` where you can verify the pin first. Only meaningful for
+    gateways with a self-signed/private certificate (a CA-signed one is verified
+    normally and nothing is pinned).
 - **`no_dtls: true`** → tunnel over TLS only. Some gateways complete the DTLS
   (UDP) handshake but then black-hole the tunnel, stalling the connection; this
   skips UDP entirely.
@@ -390,9 +404,11 @@ namespace), never on the host.
 
 For `ssh`/`local` the host auth dir (`$STATE_DIR/auth-<name>`) is shared with the
 container user through the host user's primary group (`--group-add`; dir `770`,
-files `660`). The entrypoint works from a private `0600` copy of the ssh key;
-`known_hosts` stays in the auth dir, so a pinned host key survives `--restart`
-restarts. `$STATE_DIR` itself stays `700`.
+files `660`). The entrypoint works from a private `0600` copy of the ssh key.
+The ssh `known_hosts` is seeded from `~/.config/t-forward/known_hosts/<name>`
+(outside the auth dir, so it survives every `up`) and saved back once the tunnel
+is up; a host key accepted once is therefore verified on every later connect,
+`--restart` restarts included. `$STATE_DIR` itself stays `700`.
 
 **Rootless Docker:** container uids are remapped to sub-ids, so neither uid
 `10001` nor the host gid reaches the host-owned auth dir. The CLI detects this
@@ -419,6 +435,17 @@ Update the CLI and run `t-forward build` together.
   TLS** and the token can appear in a URL, so never expose it on a public
   interface or behind a logging proxy. `--no-auth` removes the token entirely —
   only use it on a private bind where everyone who can reach it is trusted.
+- **Server identity is verified, not assumed.** openconnect refuses a
+  certificate that is not valid for a public CA unless you pin it
+  (`vpn.servercert`) or opt in to a persistent trust-on-first-use pin
+  (`vpn.tofu`, see [Connecting to awkward gateways](#connecting-to-awkward-gateways-vpn)).
+  ssh remembers a server's host key across connects in
+  `~/.config/t-forward/known_hosts/<name>`: it is trusted only the first time it
+  is ever seen and a *changed* key is refused (`ssh.strict_host_key: true` also
+  refuses the first-seen key until you add it yourself).
+- Don't pass secrets as `--password PW` / `--totp-secret S`: they show up in `ps`
+  and shell history. Use `--password-file PATH`, `--password-stdin` or
+  `--totp-secret-file PATH`, or keep them in the (mode `600`) config.
 - Configs hold plaintext credentials; they are kept at mode `600` and the
   `.gitignore` excludes real config directories. Keep them out of version control.
 - Panel config edits are whitelisted and injection-safe, and never modify the
