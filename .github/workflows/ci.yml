@@ -16,10 +16,13 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: web/go.mod
+          check-latest: true      # newest patch of the go.mod series, not the runner's cached one
           cache: false            # stdlib-only module, no go.sum to key a cache on
       - name: gofmt
         run: |
@@ -30,12 +33,18 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
+      - name: govulncheck
+        # fails on any reachable vulnerability in the stdlib the daemon is
+        # built with (the module has no third-party dependencies)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   shell:
     name: Shell lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Parse bash scripts
         run: |
           bash -n t-forward

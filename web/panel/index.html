@@ -2562,7 +2562,7 @@ function settingsLockScreen(el) {
       body: JSON.stringify({ pin }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok) { adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); renderSettings(); }
-    else el.querySelector("#set-lock-msg").textContent = "wrong PIN";
+    else el.querySelector("#set-lock-msg").textContent = r.status === 429 ? "too many attempts — wait a moment and try again" : "wrong PIN";
   };
   el.querySelector("#set-unlock").addEventListener("click", go);
   const pin = el.querySelector("#set-pin"); pin.focus();

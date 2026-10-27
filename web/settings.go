@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Settings is the daemon's persisted configuration blob (Telegram / Claude
@@ -17,9 +15,11 @@ import (
 // as tunnel *.yaml). Secrets are never returned to the panel; GET /settings
 // reports only "configured" flags.
 type Settings struct {
-	// sha256(hex) of the admin PIN that gates privileged endpoints. Empty until
-	// the operator sets one (first-run bootstrap: privileged POSTs are open only
-	// while this is empty, so the PIN can be set in the first place).
+	// Hash of the admin PIN that gates privileged endpoints (salted PBKDF2, see
+	// admin.go; hashes written by older versions are plain hex SHA-256 and are
+	// upgraded on the next successful unlock). Empty until the operator sets
+	// one (first-run bootstrap: privileged POSTs are open only while this is
+	// empty, so the PIN can be set in the first place).
 	AdminSecretHash string       `json:"adminSecretHash,omitempty"`
 	Telegram        TelegramConf `json:"telegram"`
 	ClaudeAPIKey    string       `json:"claudeApiKey,omitempty"` // optional; else the server's own claude auth
@@ -54,11 +54,6 @@ type EventFlags struct {
 	Up    *bool `json:"up,omitempty"`
 	Warn  *bool `json:"warn,omitempty"`
 	Reach *bool `json:"reach,omitempty"`
-}
-
-func hashPIN(pin string) string {
-	sum := sha256.Sum256([]byte(pin))
-	return hex.EncodeToString(sum[:])
 }
 
 func settingsPathFor(confDir string) string {
@@ -103,19 +98,28 @@ func (a *Actions) saveSettings(s Settings) error {
 // requirePrivileged reports whether the request may perform a privileged action.
 // It writes a 403 (with needPin) and returns false when the admin gate rejects
 // it. While no admin PIN is set (first run) everything is open so the PIN can be
-// established; once set, an X-Admin-Token header or tf_admin cookie is required.
+// established; once set, a session token (tf_admin cookie or X-Admin-Token
+// header, minted by /admin/unlock) is required. API clients may also send the
+// PIN itself in X-Admin-Token; that path is subject to the same lockout as
+// /admin/unlock. The cookie only ever carries a session token, never the PIN.
 func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool {
 	s := a.loadSettings()
 	if s.AdminSecretHash == "" {
 		return true // first-run bootstrap
 	}
-	got := r.Header.Get("X-Admin-Token")
-	if got == "" {
-		if c, err := r.Cookie("tf_admin"); err == nil {
-			got = c.Value
+	if hdr := r.Header.Get("X-Admin-Token"); hdr != "" {
+		if a.gate.validSession(hdr) {
+			return true
 		}
-	}
-	if got != "" && subtle.ConstantTimeCompare([]byte(hashPIN(got)), []byte(s.AdminSecretHash)) == 1 {
+		ok, retry := a.checkPIN(hdr)
+		if ok {
+			return true
+		}
+		if retry > 0 {
+			lockedResponse(w, retry)
+			return false
+		}
+	} else if c, err := r.Cookie("tf_admin"); err == nil && a.gate.validSession(c.Value) {
 		return true
 	}
 	writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "locked", "needPin": true})
@@ -168,11 +172,18 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			defer r.Body.Close()
 			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in)
 		}
+		newPin := in.AdminPin != nil && *in.AdminPin != ""
+		if newPin && !validPINLength(*in.AdminPin) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok": false, "error": "admin PIN must be at least " + strconv.Itoa(minPINLen) + " characters",
+			})
+			return
+		}
 		// Serialize the whole load->mutate->save so two concurrent POSTs can't
 		// each read the old blob and lose one another's field updates.
 		a.mu.Lock()
 		s := a.loadSettings()
-		if in.AdminPin != nil && *in.AdminPin != "" {
+		if newPin {
 			s.AdminSecretHash = hashPIN(*in.AdminPin)
 		}
 		if in.TelegramToken != nil && *in.TelegramToken != "" {
@@ -202,14 +213,21 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
+		if newPin {
+			// the PIN changed: every old session dies, the caller (who just
+			// proved they may change it) gets a fresh one
+			a.gate.revokeAll()
+			setAdminCookie(w, a.gate.newSession())
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// handleAdminUnlock: POST {pin} — verify the PIN and set a short-lived tf_admin
-// cookie so subsequent privileged requests pass the gate.
+// handleAdminUnlock: POST {pin} — verify the PIN (with lockout after repeated
+// failures) and set a short-lived tf_admin cookie holding a random session
+// token, so subsequent privileged requests pass the gate.
 func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -221,11 +239,17 @@ func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pin := decodeBody(r)["pin"]
-	if pin != "" && subtle.ConstantTimeCompare([]byte(hashPIN(pin)), []byte(s.AdminSecretHash)) == 1 {
-		http.SetCookie(w, &http.Cookie{
-			Name: "tf_admin", Value: pin, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 8 * 3600,
-		})
+	if pin == "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "wrong pin"})
+		return
+	}
+	ok, retry := a.checkPIN(pin)
+	if retry > 0 {
+		lockedResponse(w, retry)
+		return
+	}
+	if ok {
+		setAdminCookie(w, a.gate.newSession())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}

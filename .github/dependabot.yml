@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # keep the SHA-pinned actions current
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # keep the digest-pinned Alpine base image current
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  # go.mod toolchain line (the module has no third-party dependencies)
+  - package-ecosystem: gomod
+    directory: /web
+    schedule:
+      interval: weekly
