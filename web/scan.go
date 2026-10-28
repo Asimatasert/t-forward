@@ -773,8 +773,8 @@ func (a *Actions) handleScanDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// validDeviceID accepts exactly a MAC ("aa:bb:cc:dd:ee:ff", six hex pairs,
-// either case) or "ip:<ipv4>". strenv already makes yq injection impossible;
+// validDeviceID accepts exactly a MAC ("aa:bb:cc:dd:ee:ff", six bytes of 1–2
+// hex digits, either case) or "ip:<ipv4>". strenv already makes yq injection impossible;
 // this keeps junk keys out of devices.yaml. Only the write path
 // (handleScanDevice) calls it — existing devices.yaml entries are read as-is.
 func validDeviceID(s string) bool {
@@ -783,19 +783,21 @@ func validDeviceID(s string) bool {
 		return !strings.Contains(rest, ":") && strings.Count(rest, ".") == 3 &&
 			net.ParseIP(rest).To4() != nil
 	}
-	if len(s) != 17 {
+	// Six bytes of 1–2 hex digits: macOS `arp -n` drops leading zeros
+	// ("0:1b:63:84:45:e6") and arpMAC passes that through as the id.
+	parts := strings.Split(s, ":")
+	if len(parts) != 6 {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if i%3 == 2 {
-			if c != ':' {
+	for _, p := range parts {
+		if len(p) < 1 || len(p) > 2 {
+			return false
+		}
+		for i := 0; i < len(p); i++ {
+			c := p[i]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 				return false
 			}
-			continue
-		}
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
 		}
 	}
 	return true
