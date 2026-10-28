@@ -370,9 +370,6 @@ func TestCloneForwardsNil(t *testing.T) {
 // panel normalizes via applyState (`forwards: s.forwards || []`), so there is
 // no visible error today.
 func TestCloneForwardsKeepsEmptySliceNonNil(t *testing.T) {
-	t.Skip("BUG (low): cloneForwards turns an empty non-nil Forwards into nil, so /state serves " +
-		"\"forwards\":null for a conf without forwards while the error path returns []; " +
-		"the panel normalizes via applyState, so there is no visible error")
 	cp := cloneForwards(Tunnel{Forwards: []Forward{}})
 	b, _ := json.Marshal(cp)
 	var m map[string]json.RawMessage
