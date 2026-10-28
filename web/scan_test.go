@@ -173,8 +173,6 @@ func TestRedisHostPort(t *testing.T) {
 // redis-cli gets `-p <port>`: an empty port (trailing colon) or a bare IPv6
 // literal being split at its last colon yields a broken command line.
 func TestRedisHostPortMalformed(t *testing.T) {
-	t.Skip("BUG: redisHostPort splits at the last colon: \"redis:\" gives an empty port and a bare " +
-		"IPv6 literal such as \"::1\" is cut in half, so redis-cli gets a broken -h/-p")
 	if h, p := redisHostPort("redis:"); h != "redis" || p != "6379" {
 		t.Errorf(`redisHostPort("redis:") = (%q, %q), want ("redis", "6379")`, h, p)
 	}
@@ -287,8 +285,6 @@ func TestValidDeviceID(t *testing.T) {
 // The doc comment promises "a MAC or ip:<ipv4> shape (hex, dots, colons, the
 // ip: prefix)". The check accepts any a-z letters, so non-hex words pass.
 func TestValidDeviceIDRequiresMACOrIPShape(t *testing.T) {
-	t.Skip("BUG: validDeviceID accepts any a-z/0-9/:/. string (\"hello\", \"..\", \":\"), not only a MAC " +
-		"or ip:<ipv4> as its comment says; harmless for yq (strenv) but junk keys get stored in devices.yaml")
 	for _, s := range []string{"zz:zz:zz:zz:zz:zz", "hello", "ip:ip:ip", "::", "..", ":", "."} {
 		if validDeviceID(s) {
 			t.Errorf("validDeviceID(%q) = true, but it is neither a MAC nor ip:<ipv4>", s)
