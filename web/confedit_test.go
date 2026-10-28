@@ -144,6 +144,8 @@ func TestIsNumeric(t *testing.T) {
 		{"80", true},
 		{"65535", true},
 		{"007", true},
+		{"-1", false},
+		{"+80", false},
 		{"", false},
 		{" 1", false},
 		{"1 ", false},
@@ -164,13 +166,25 @@ func TestIsNumeric(t *testing.T) {
 	}
 }
 
-// A forward key is "ip:port"; a signed port is not a port. isNumeric uses
-// strconv.Atoi, which accepts a sign.
+// A forward key is "ip:port"; a signed port is not a port.
 func TestForwardKeyRejectsSignedPort(t *testing.T) {
 	for _, port := range []string{"-1", "+80"} {
 		e := confEdit{Forwards: map[string]string{"10.0.0.5:" + port: "x"}}
 		if err := validateEdit(e); err == nil {
 			t.Errorf("forward key with port %q was accepted", port)
+		}
+	}
+}
+
+func TestValidPort(t *testing.T) {
+	for _, s := range []string{"1", "22", "80", "5432", "65535"} {
+		if !validPort(s) {
+			t.Errorf("validPort(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "0", "65536", "99999", "-1", "+80", "080", "007", " 80", "80 ", "8.0", "1e3", "٣", "99999999999999999999"} {
+		if validPort(s) {
+			t.Errorf("validPort(%q) = true, want false", s)
 		}
 	}
 }
@@ -221,9 +235,8 @@ func TestValidCIDRKey(t *testing.T) {
 	}
 }
 
-// validCIDRKey only checks the characters (digits, dots, one slash), not that
-// the key parses as a CIDR. Everything below is "CIDR-shaped" by that rule but
-// is not an IPv4 CIDR.
+// Everything below is "CIDR-shaped" (digits, dots, one slash) but is not an
+// IPv4 CIDR, so validCIDRKey must reject it.
 func TestValidCIDRKeyRequiresRealCIDR(t *testing.T) {
 	for _, s := range []string{"/", "../", "..", "./.", "1/2", "10.0.0.0/", "/16", "...../", "999.1.1.1/8", "10.0.0.0/33", "1.2.3/8", "10.0.0.0/099"} {
 		if _, ipn, err := net.ParseCIDR(s); err == nil && ipn.IP.To4() != nil {
