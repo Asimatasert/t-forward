@@ -123,6 +123,10 @@ func TestDeviceID(t *testing.T) {
 func TestDeviceIDIsAcceptedByValidDeviceID(t *testing.T) {
 	for _, id := range []string{
 		deviceID("AA:BB:CC:DD:EE:FF", "192.0.2.1"),
+		// macOS `arp -n` drops leading zeros of each byte; arpMAC passes
+		// that through unchanged, so these are real ids on macOS hosts.
+		deviceID("0:1b:63:84:45:e6", "192.168.1.5"),
+		deviceID("0:0:0:0:0:1", "192.168.1.6"),
 		deviceID("", "192.0.2.1"),
 	} {
 		if !validDeviceID(id) {
