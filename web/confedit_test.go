@@ -167,7 +167,6 @@ func TestIsNumeric(t *testing.T) {
 // A forward key is "ip:port"; a signed port is not a port. isNumeric uses
 // strconv.Atoi, which accepts a sign.
 func TestForwardKeyRejectsSignedPort(t *testing.T) {
-	t.Skip("BUG: isNumeric uses strconv.Atoi, so validateEdit accepts a signed forward port such as ip:-1 or ip:+80")
 	for _, port := range []string{"-1", "+80"} {
 		e := confEdit{Forwards: map[string]string{"10.0.0.5:" + port: "x"}}
 		if err := validateEdit(e); err == nil {
@@ -226,8 +225,6 @@ func TestValidCIDRKey(t *testing.T) {
 // the key parses as a CIDR. Everything below is "CIDR-shaped" by that rule but
 // is not an IPv4 CIDR.
 func TestValidCIDRKeyRequiresRealCIDR(t *testing.T) {
-	t.Skip("BUG: validCIDRKey checks characters only (digits, dots, one slash), so \"/\", \"../\", " +
-		"\"1/2\", \"999.1.1.1/8\" and \"10.0.0.0/33\" are accepted as subnet keys")
 	for _, s := range []string{"/", "../", "..", "./.", "1/2", "10.0.0.0/", "/16", "...../", "999.1.1.1/8", "10.0.0.0/33", "1.2.3/8", "10.0.0.0/099"} {
 		if _, ipn, err := net.ParseCIDR(s); err == nil && ipn.IP.To4() != nil {
 			t.Fatalf("test table error: %q is a valid IPv4 CIDR", s)
