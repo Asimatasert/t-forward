@@ -591,11 +591,26 @@ func (s *Scanner) loadCache() {
 	}
 }
 
+// redisHostPort splits a "host[:port]" setting into the -h/-p values for
+// redis-cli. The port defaults to 6379 when absent or empty ("redis:"); a bare
+// IPv6 literal ("::1") is a host, not host+port; "[::1]:6380" yields the
+// unbracketed host redis-cli expects.
 func redisHostPort(hp string) (string, string) {
-	if i := strings.LastIndexByte(hp, ':'); i >= 0 {
-		return hp[:i], hp[i+1:]
+	const defPort = "6379"
+	hp = strings.TrimSpace(hp)
+	if host, port, err := net.SplitHostPort(hp); err == nil {
+		if port == "" {
+			port = defPort
+		}
+		return host, port
 	}
-	return hp, "6379"
+	// Bracketed IPv6 without a port: "[::1]".
+	if strings.HasPrefix(hp, "[") && strings.HasSuffix(hp, "]") {
+		return hp[1 : len(hp)-1], defPort
+	}
+	// Anything else that SplitHostPort rejects (bare IPv6, no port): whole
+	// string is the host.
+	return hp, defPort
 }
 
 // validIfaceName accepts only interface-name-shaped strings (alnum plus . _ - :),
@@ -758,16 +773,28 @@ func (a *Actions) handleScanDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// validDeviceID accepts a MAC or "ip:<ipv4>" shape (hex, dots, colons, the "ip:"
-// prefix) — enough to key annotations, and strenv makes injection impossible.
+// validDeviceID accepts exactly a MAC ("aa:bb:cc:dd:ee:ff", six hex pairs,
+// either case) or "ip:<ipv4>". strenv already makes yq injection impossible;
+// this keeps junk keys out of devices.yaml. Only the write path
+// (handleScanDevice) calls it — existing devices.yaml entries are read as-is.
 func validDeviceID(s string) bool {
-	if s == "" || len(s) > 64 {
+	if rest, ok := strings.CutPrefix(s, "ip:"); ok {
+		// Dotted quad only: ParseIP would also accept IPv6 / ::ffff:a.b.c.d.
+		return !strings.Contains(rest, ":") && strings.Count(rest, ".") == 3 &&
+			net.ParseIP(rest).To4() != nil
+	}
+	if len(s) != 17 {
 		return false
 	}
-	for _, r := range s {
-		ok := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') ||
-			r == ':' || r == '.'
-		if !ok {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if i%3 == 2 {
+			if c != ':' {
+				return false
+			}
+			continue
+		}
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return false
 		}
 	}

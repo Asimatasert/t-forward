@@ -160,7 +160,11 @@ func TestRedisHostPort(t *testing.T) {
 		{"10.0.0.5:6379", "10.0.0.5", "6379"},
 		{"redis", "redis", "6379"}, // default port
 		{"10.0.0.5", "10.0.0.5", "6379"},
-		{"[::1]:6379", "[::1]", "6379"},
+		{"[::1]:6379", "::1", "6379"}, // redis-cli -h wants the unbracketed host
+		{"[::1]:6380", "::1", "6380"},
+		{"[::1]", "::1", "6379"},
+		{"2001:db8::5", "2001:db8::5", "6379"},
+		{"  redis:6380 ", "redis", "6380"},
 	}
 	for _, c := range cases {
 		h, p := redisHostPort(c.in)
@@ -238,7 +242,8 @@ func TestValidDeviceID(t *testing.T) {
 		"00:11:22:33:44:55",
 		"ip:192.0.2.1",
 		"ip:10.0.0.255",
-		strings.Repeat("a", 64),
+		"AA:BB:CC:DD:EE:FF", // existing records may be upper case; handler lowercases anyway
+		"aA:0b:Cc:1d:eE:f2",
 	}
 	for _, s := range good {
 		if !validDeviceID(s) {
@@ -269,7 +274,17 @@ func TestValidDeviceID(t *testing.T) {
 		"aa:bb\x00",
 		"aa:bb\"",
 		"aa:bb'",
-		"AA:BB:CC:DD:EE:FF", // callers lowercase first; upper case is not a valid key
+		strings.Repeat("a", 64), // right charset, wrong shape
+		"aa:bb:cc:dd:ee",        // too short
+		"aa:bb:cc:dd:ee:ff:00",  // too long
+		"aabb:cc:dd:ee:ff:00",
+		"aa:bb:cc:dd:ee:fg",
+		"ip:",
+		"ip:999.1.1.1",
+		"ip:10.0.0",
+		"ip:::ffff:10.0.0.1",
+		"ip:2001:db8::1",
+		"ip:010.0.0.1",
 		"ip:10.0.0.1/24",
 		"aa-bb-cc-dd-ee-ff",
 		"ip=10.0.0.1",
