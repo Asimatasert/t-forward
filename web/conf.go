@@ -269,7 +269,11 @@ func (d *Docker) tunnelFromConf(name string) Tunnel {
 // caller that overwrites forward fields can't mutate a cached Tunnel.
 func cloneForwards(t Tunnel) Tunnel {
 	if t.Forwards != nil {
-		t.Forwards = append([]Forward(nil), t.Forwards...)
+		// make+copy (not append to nil) so an empty non-nil slice stays non-nil
+		// and marshals as [] rather than null.
+		cp := make([]Forward, len(t.Forwards))
+		copy(cp, t.Forwards)
+		t.Forwards = cp
 	}
 	return t
 }
