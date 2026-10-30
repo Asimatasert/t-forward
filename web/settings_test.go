@@ -333,6 +333,49 @@ func TestSettingsPostWrongTypedNotifyKeepsSettings(t *testing.T) {
 	}
 }
 
+// A body that fails to decode must be a 400 and leave the stored settings
+// byte-for-byte untouched (no write at all).
+func TestSettingsPostUndecodableBodyChangesNothing(t *testing.T) {
+	cases := map[string]string{
+		"invalid JSON":               `{`,
+		"not JSON at all":            `nope`,
+		"empty body":                 ``,
+		"wrong-typed claudeApiKey":   `{"claudeApiKey":123,"telegramChatId":"x"}`,
+		"wrong-typed telegramTopics": `{"telegramTopics":"x","telegramChatId":"x"}`,
+		"wrong-typed adminPin":       `{"adminPin":12345678}`,
+		"wrong-typed notify":         `{"notify":"nope"}`,
+		"wrong-typed notify field":   `{"notify":{"down":"yes"},"telegramChatId":"x"}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newActEnv(t)
+			e.writeSettings(t, Settings{
+				ClaudeAPIKey: "keep-me",
+				Telegram:     TelegramConf{ChatID: "chat-1"},
+				Notify:       NotifyConf{Down: true},
+			})
+			before, err := os.ReadFile(settingsFile(e))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := e.postSettings(body, nil)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if m := jsonBody(t, rec); m["ok"] != false || m["error"] == "" {
+				t.Errorf("response = %v, want {ok:false, error:...}", m)
+			}
+			after, err := os.ReadFile(settingsFile(e))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Errorf("settings.json changed:\nbefore: %s\nafter:  %s", before, after)
+			}
+		})
+	}
+}
+
 func TestSettingsPostBodyCappedAt64KiB(t *testing.T) {
 	e := newActEnv(t)
 	body := `{"claudeApiKey":"` + strings.Repeat("k", 70<<10) + `"}`
