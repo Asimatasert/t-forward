@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -93,7 +94,7 @@ func validateEdit(e confEdit) error {
 	}
 	for k, v := range e.Forwards {
 		ip, rport, ok := strings.Cut(k, ":")
-		if !ok || ip == "" || !isNumeric(rport) {
+		if !ok || ip == "" || !validPort(rport) {
 			return errStr("forward key must be ip:port")
 		}
 		if !oneLine(v) {
@@ -203,15 +204,34 @@ func jsonArr(s []string) string {
 	return string(b)
 }
 
+// isNumeric reports whether s is a non-empty run of ASCII digits that fits an
+// int. A sign (strconv.Atoi accepts "-1" and "+80") is not a digit.
 func isNumeric(s string) bool {
 	if s == "" {
 		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
 	}
 	_, err := strconv.Atoi(s)
 	return err == nil
 }
 
-// validCIDRKey accepts only IPv4-CIDR-shaped keys (digits, dots, one slash).
+// validPort accepts a forward remote port as written in the conf: ASCII digits
+// only, no leading zero (the yq lookup parses it as a JSON number), 1-65535.
+func validPort(s string) bool {
+	if !isNumeric(s) || s[0] == '0' {
+		return false
+	}
+	n, _ := strconv.Atoi(s)
+	return n >= 1 && n <= 65535
+}
+
+// validCIDRKey accepts only real IPv4 CIDRs: digits, dots and one slash, and
+// the key must parse with net.ParseCIDR as an IPv4 network (which also rejects
+// leading-zero octets and prefixes such as "/099", and IPv6 forms).
 func validCIDRKey(s string) bool {
 	if s == "" || strings.Count(s, "/") != 1 {
 		return false
@@ -221,7 +241,8 @@ func validCIDRKey(s string) bool {
 			return false
 		}
 	}
-	return true
+	_, ipn, err := net.ParseCIDR(s)
+	return err == nil && ipn.IP.To4() != nil
 }
 
 type errStr string
