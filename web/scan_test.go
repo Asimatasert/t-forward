@@ -123,6 +123,10 @@ func TestDeviceID(t *testing.T) {
 func TestDeviceIDIsAcceptedByValidDeviceID(t *testing.T) {
 	for _, id := range []string{
 		deviceID("AA:BB:CC:DD:EE:FF", "192.0.2.1"),
+		// macOS `arp -n` drops leading zeros of each byte; arpMAC passes
+		// that through unchanged, so these are real ids on macOS hosts.
+		deviceID("0:1b:63:84:45:e6", "192.168.1.5"),
+		deviceID("0:0:0:0:0:1", "192.168.1.6"),
 		deviceID("", "192.0.2.1"),
 	} {
 		if !validDeviceID(id) {
@@ -160,7 +164,11 @@ func TestRedisHostPort(t *testing.T) {
 		{"10.0.0.5:6379", "10.0.0.5", "6379"},
 		{"redis", "redis", "6379"}, // default port
 		{"10.0.0.5", "10.0.0.5", "6379"},
-		{"[::1]:6379", "[::1]", "6379"},
+		{"[::1]:6379", "::1", "6379"}, // redis-cli -h wants the unbracketed host
+		{"[::1]:6380", "::1", "6380"},
+		{"[::1]", "::1", "6379"},
+		{"2001:db8::5", "2001:db8::5", "6379"},
+		{"  redis:6380 ", "redis", "6380"},
 	}
 	for _, c := range cases {
 		h, p := redisHostPort(c.in)
@@ -173,8 +181,6 @@ func TestRedisHostPort(t *testing.T) {
 // redis-cli gets `-p <port>`: an empty port (trailing colon) or a bare IPv6
 // literal being split at its last colon yields a broken command line.
 func TestRedisHostPortMalformed(t *testing.T) {
-	t.Skip("BUG: redisHostPort splits at the last colon: \"redis:\" gives an empty port and a bare " +
-		"IPv6 literal such as \"::1\" is cut in half, so redis-cli gets a broken -h/-p")
 	if h, p := redisHostPort("redis:"); h != "redis" || p != "6379" {
 		t.Errorf(`redisHostPort("redis:") = (%q, %q), want ("redis", "6379")`, h, p)
 	}
@@ -240,7 +246,8 @@ func TestValidDeviceID(t *testing.T) {
 		"00:11:22:33:44:55",
 		"ip:192.0.2.1",
 		"ip:10.0.0.255",
-		strings.Repeat("a", 64),
+		"AA:BB:CC:DD:EE:FF", // existing records may be upper case; handler lowercases anyway
+		"aA:0b:Cc:1d:eE:f2",
 	}
 	for _, s := range good {
 		if !validDeviceID(s) {
@@ -271,7 +278,17 @@ func TestValidDeviceID(t *testing.T) {
 		"aa:bb\x00",
 		"aa:bb\"",
 		"aa:bb'",
-		"AA:BB:CC:DD:EE:FF", // callers lowercase first; upper case is not a valid key
+		strings.Repeat("a", 64), // right charset, wrong shape
+		"aa:bb:cc:dd:ee",        // too short
+		"aa:bb:cc:dd:ee:ff:00",  // too long
+		"aabb:cc:dd:ee:ff:00",
+		"aa:bb:cc:dd:ee:fg",
+		"ip:",
+		"ip:999.1.1.1",
+		"ip:10.0.0",
+		"ip:::ffff:10.0.0.1",
+		"ip:2001:db8::1",
+		"ip:010.0.0.1",
 		"ip:10.0.0.1/24",
 		"aa-bb-cc-dd-ee-ff",
 		"ip=10.0.0.1",
@@ -287,8 +304,6 @@ func TestValidDeviceID(t *testing.T) {
 // The doc comment promises "a MAC or ip:<ipv4> shape (hex, dots, colons, the
 // ip: prefix)". The check accepts any a-z letters, so non-hex words pass.
 func TestValidDeviceIDRequiresMACOrIPShape(t *testing.T) {
-	t.Skip("BUG: validDeviceID accepts any a-z/0-9/:/. string (\"hello\", \"..\", \":\"), not only a MAC " +
-		"or ip:<ipv4> as its comment says; harmless for yq (strenv) but junk keys get stored in devices.yaml")
 	for _, s := range []string{"zz:zz:zz:zz:zz:zz", "hello", "ip:ip:ip", "::", "..", ":", "."} {
 		if validDeviceID(s) {
 			t.Errorf("validDeviceID(%q) = true, but it is neither a MAC nor ip:<ipv4>", s)
