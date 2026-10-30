@@ -325,8 +325,6 @@ func TestSettingsPostMalformedBodyChangesNothing(t *testing.T) {
 }
 
 func TestSettingsPostWrongTypedNotifyKeepsSettings(t *testing.T) {
-	t.Skip("BUG: handleSettings ignores the json Decode error; a wrong-typed field like {\"notify\":\"nope\"} " +
-		"still allocates the *NotifyConf pointer, so all notify toggles are silently reset to zero")
 	e := newActEnv(t)
 	e.writeSettings(t, Settings{Notify: NotifyConf{Down: true}})
 	e.postSettings(`{"notify":"nope"}`, nil)
