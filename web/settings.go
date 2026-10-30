@@ -170,7 +170,14 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Body != nil {
 			defer r.Body.Close()
-			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in)
+			// A body that does not decode (bad JSON, wrong-typed field, over
+			// the size cap) is rejected whole: a half-decoded struct could
+			// otherwise reset settings, e.g. {"notify":"nope"} allocates the
+			// *NotifyConf pointer and zeroes every toggle.
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid settings JSON"})
+				return
+			}
 		}
 		newPin := in.AdminPin != nil && *in.AdminPin != ""
 		if newPin && !validPINLength(*in.AdminPin) {
