@@ -155,17 +155,30 @@ func TestIsLoopbackHost(t *testing.T) {
 	}
 }
 
-// main() refuses -no-auth on a non-loopback bind using
-// isLoopbackHost(hostOnly(addr)). An address with an empty host (":8787") binds
-// every interface, but the empty host is classified as loopback, so the
-// refusal is bypassed and -no-auth is served to the whole network without
-// -expose.
+// main() refuses -no-auth on a non-loopback bind using bindIsLoopback(addr). An
+// address with an empty host (":8787") binds every interface, so it (like
+// 0.0.0.0 and [::]) must not count as loopback.
 func TestNoAuthGuardTreatsWildcardBindAsNonLoopback(t *testing.T) {
-	t.Skip("BUG: isLoopbackHost(hostOnly(\":8787\")) is true, so `-no-auth -addr :8787` (all interfaces) starts without -expose")
-	for _, addr := range []string{":8787", "0.0.0.0:8787", "[::]:8787"} {
-		if isLoopbackHost(hostOnly(addr)) {
-			t.Errorf("wildcard bind %q must not count as loopback", addr)
+	for _, addr := range []string{":8787", "0.0.0.0:8787", "[::]:8787", "192.168.1.5:8787", "example.com:8787", "127.0.0.1.evil.com:8787"} {
+		if bindIsLoopback(addr) {
+			t.Errorf("bindIsLoopback(%q) = true, want false", addr)
 		}
+	}
+	for _, addr := range []string{"127.0.0.1:8787", "127.9.9.9:8787", "localhost:8787", "LOCALHOST:8787", "[::1]:8787"} {
+		if !bindIsLoopback(addr) {
+			t.Errorf("bindIsLoopback(%q) = false, want true", addr)
+		}
+	}
+}
+
+// isLoopbackHost / hostAllowed keep accepting an empty value: a missing Host
+// header (HTTP/1.0 clients) must still be allowed. Only the bind guard is strict.
+func TestEmptyHostStillAllowedForHostHeader(t *testing.T) {
+	if !isLoopbackHost("") {
+		t.Error("isLoopbackHost(\"\") = false, want true (unchanged)")
+	}
+	if !hostAllowed("", nil) {
+		t.Error("hostAllowed(\"\") = false, want true (missing Host header)")
 	}
 }
 
@@ -397,15 +410,30 @@ func TestTokenMiddleware(t *testing.T) {
 // tokenMiddleware compares with ConstantTimeCompare, which treats two empty
 // slices as equal, so an empty configured token lets every credential-less
 // request through. main() cannot reach this (an empty token is replaced by a
-// random one, and -no-auth skips the middleware), so it is latent
-// defence-in-depth only.
+// random one, and -no-auth skips the middleware); tokenMiddleware now fails
+// closed anyway as defence-in-depth.
 func TestTokenMiddlewareEmptyTokenRejectsAnonymous(t *testing.T) {
-	t.Skip("BUG (latent): tokenMiddleware(\"\", …) accepts requests that carry no credentials; main() never passes an empty token")
 	h := tokenMiddleware("", okHandler())
+	for _, path := range []string{"/state", "/"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401", path, rec.Code)
+		}
+	}
+	// an explicitly empty credential must not match either
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/state", nil))
+	req := httptest.NewRequest(http.MethodGet, "/state?token=", nil)
+	req.Header.Set("X-Token", "")
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
+		t.Errorf("empty credential: status = %d, want 401", rec.Code)
+	}
+	// /healthz stays unauthenticated
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code == http.StatusUnauthorized {
+		t.Error("/healthz must stay open")
 	}
 }
 

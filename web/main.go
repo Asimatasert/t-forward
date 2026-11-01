@@ -41,7 +41,7 @@ func main() {
 	// -no-auth serves full control to anyone who can reach the socket. On a
 	// non-loopback bind that is the whole network, so require an explicit -expose
 	// acknowledgement rather than let a stray flag silently expose the host.
-	if *noAuth && !isLoopbackHost(hostOnly(*addr)) && !*expose {
+	if *noAuth && !bindIsLoopback(*addr) && !*expose {
 		log.Fatalf("-no-auth on a non-loopback address (%s) exposes full control to the network; re-run with -expose to confirm you intend this", *addr)
 	}
 
@@ -277,6 +277,12 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Fail closed: ConstantTimeCompare treats two empty slices as equal, so an
+		// empty configured token would otherwise accept credential-less requests.
+		if want == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		var got string
 		if h := r.Header.Get("Authorization"); h != "" {
 			got = trimBearer(h)
@@ -391,6 +397,26 @@ func isLoopbackHost(h string) bool {
 	}
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
+}
+
+// bindIsLoopback reports whether a listen address (host:port) only accepts
+// connections from the local machine. Unlike isLoopbackHost, an empty host
+// (":8787") and an unspecified IP ("0.0.0.0", "::") mean "every interface" and
+// are NOT loopback. Anything that is not localhost or a loopback IP literal is
+// treated as non-loopback (fail closed).
+func bindIsLoopback(addr string) bool {
+	h := hostOnly(addr)
+	if h == "" {
+		return false
+	}
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil || ip.IsUnspecified() {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 func splitComma(s string) []string {
