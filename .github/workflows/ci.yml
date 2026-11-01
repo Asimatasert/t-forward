@@ -53,3 +53,33 @@ jobs:
         # gate on warning+; info/style nags are opinionated and vary by
         # shellcheck version, which would make CI flaky across runner updates
         run: shellcheck --severity=warning t-forward entrypoint.sh
+
+  python-helpers:
+    name: Python helpers (unittest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.x"
+      - name: unittest web/helpers
+        # the helpers are stdlib-only; test_totp_imap imports totp_imap as a
+        # top-level module, so run from inside the folder
+        working-directory: web/helpers
+        run: python -m unittest -v test_totp_imap
+
+  tofu-regression:
+    name: TOFU pin on restart (docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image under test
+        run: docker build -t t-forward:test .
+      - name: tests/tofu-restart.sh
+        # needs docker, python3 and openssl on the runner (all preinstalled)
+        run: tests/tofu-restart.sh t-forward:test

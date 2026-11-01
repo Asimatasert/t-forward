@@ -29,6 +29,13 @@ check() { # check DESCRIPTION CONDITION-EXIT-CODE
     if [ "$2" -eq 0 ]; then echo "ok   - $1"; else echo "FAIL - $1"; fails=$((fails + 1)); fi
 }
 
+# The container runs as root and writes learned_servercert with mode 0600, so
+# the host user (e.g. the unprivileged CI runner) cannot cat it directly: read
+# it through the image instead (works the same on Docker Desktop and Linux).
+read_pin() {
+    docker run --rm --user 0 -v "$WORK:/w" --entrypoint cat "$IMG" /w/auth/learned_servercert 2>/dev/null
+}
+
 mkcert() { # mkcert NAME
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=gw-$1" \
         -keyout "$WORK/$1.key" -out "$WORK/$1.pem" >/dev/null 2>&1
@@ -89,7 +96,7 @@ echo "# first start: gateway presents certificate A"
 start_gw a
 docker start "$NAME" >/dev/null
 wait_exit
-learned=$(cat "$WORK/auth/learned_servercert" 2>/dev/null)
+learned=$(read_pin)
 case "$learned" in pin-sha256:*) rc=0 ;; *) rc=1 ;; esac
 check "first start learned a pin ($learned)" "$rc"
 stop_gw
@@ -104,7 +111,7 @@ stop_gw
 
 if [ ! -s "$WORK/gw.log" ]; then rc=0; else rc=1; fi
 check "restart sent 0 requests to the gateway with the changed certificate" "$rc"
-if [ "$(cat "$WORK/auth/learned_servercert" 2>/dev/null)" = "$learned" ]; then rc=0; else rc=1; fi
+if [ "$(read_pin)" = "$learned" ]; then rc=0; else rc=1; fi
 check "the stored pin was not overwritten" "$rc"
 second=$(docker logs "$NAME" 2>&1 | tail -n +"$((skip + 1))")
 printf '%s\n' "$second" | grep -q 'enforcing the pin learned earlier'; check "restart enforced the learned pin" $?
