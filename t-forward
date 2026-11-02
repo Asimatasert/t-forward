@@ -789,7 +789,7 @@ cmd_up() {
         [ -n "$NAME" ] || die "ad-hoc up needs --name or enough to derive one"
         [ -n "$cli_tags" ] && TAGS=$cli_tags
         [ -n "$cli_noprompt" ] && NOPROMPT=1
-        validate_conf "$NAME"
+        validate_conf "$NAME" || return 1
         up_one "$NAME"
         return $?
     fi
