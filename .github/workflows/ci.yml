@@ -83,3 +83,19 @@ jobs:
       - name: tests/tofu-restart.sh
         # needs docker, python3 and openssl on the runner (all preinstalled)
         run: tests/tofu-restart.sh t-forward:test
+
+  cli-blackbox:
+    name: CLI black-box tests (fake docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: yq (preinstalled on the runner; the CLI needs mikefarah yq v4)
+        run: yq --version
+      - name: shellcheck the tests
+        run: shellcheck --severity=warning tests/cli/run.sh tests/cli/fake-docker
+      - name: tests/cli/run.sh
+        # no docker daemon needed: tests/cli/fake-docker stands in for it
+        run: bash tests/cli/run.sh -v
