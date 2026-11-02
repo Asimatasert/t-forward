@@ -849,14 +849,22 @@ func TestApplyEditsKeysCannotInjectYq(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ip %q: %v", ip, err)
 			}
-			if got := readFile(t, f); got != sampleConf {
-				t.Errorf("ip %q modified the conf:\n%s", ip, got)
+			// yq re-serialises the file (whitespace, blank lines), so compare
+			// the parsed document, not the bytes. Secret lines are checked
+			// byte for byte by assertSecretsIntact.
+			if got, want := yqJSON(t, f, "."), yqJSON(t, writeConf(t, sampleConf), "."); got != want {
+				t.Errorf("ip %q modified the conf:\n got %s\nwant %s", ip, got, want)
 			}
+			assertSecretsIntact(t, f)
 		}
 	})
 
 	t.Run("forward port goes through fromjson, not into the expression", func(t *testing.T) {
-		for _, rp := range []string{`22 or true`, `22; .vpn.password = "x"`, `"22"`, `null`, `[22]`, `abc`} {
+		// Note: the JSON string "22" is deliberately absent. yq compares it
+		// equal to the number 22, so it edits the real :22 forward's note;
+		// that is yq's loose equality, not injection, and validPort rejects
+		// it before applyEdits is reached.
+		for _, rp := range []string{`22 or true`, `22; .vpn.password = "x"`, `null`, `[22]`, `abc`} {
 			f := writeConf(t, sampleConf)
 			// validateEdit would reject these keys; applyEdits is called
 			// directly to prove the second line of defence. Some inputs parse
