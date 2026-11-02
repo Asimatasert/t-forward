@@ -22,7 +22,7 @@ VERSION="0.8.0"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
 # published multi-arch image pulled when $IMAGE is missing locally (set empty
 # to force a local build instead)
-HUB_IMAGE="${T_FORWARD_HUB_IMAGE:-asimatasert/t-forward}"
+HUB_IMAGE="${T_FORWARD_HUB_IMAGE-asimatasert/t-forward}"
 CONFIG_DIR="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}"
 CONF_D="$CONFIG_DIR/conf.d"
 # transient auth files shared with containers; must be under $HOME so Docker
@@ -789,7 +789,7 @@ cmd_up() {
         [ -n "$NAME" ] || die "ad-hoc up needs --name or enough to derive one"
         [ -n "$cli_tags" ] && TAGS=$cli_tags
         [ -n "$cli_noprompt" ] && NOPROMPT=1
-        validate_conf "$NAME"
+        validate_conf "$NAME" || return 1
         up_one "$NAME"
         return $?
     fi
@@ -877,6 +877,7 @@ cmd_events() {
         docker logs ${follow:+-f} --tail 40 "$id" 2>&1 | tag_events "$id"
         [ -n "$follow" ] && return 0
     done
+    return 0
 }
 
 # classify [t-forward]/socat/openconnect log lines into event levels
