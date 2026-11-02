@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#
+# Fake `docker` for tests/cli/run.sh. It is put first on PATH so the real
+# t-forward CLI runs end to end without a Docker daemon.
+#
+#  * Every call is recorded verbatim: $FAKE_DOCKER_DIR/calls/NNNN holds the
+#    arguments NUL-separated, so the tests can check argument BOUNDARIES
+#    (a shell-metacharacter value must stay ONE argument).
+#  * Containers / networks / the image are tiny stateful stand-ins (files under
+#    $FAKE_DOCKER_DIR) so up -> status -> down behave like the real thing.
+#  * `docker run` plays the part of the container entrypoint: it snapshots the
+#    shared /auth directory ($FAKE_DOCKER_DIR/snapshot: "file mode content")
+#    and then signals readiness (or a failure) the way the entrypoint would.
+#
+# Behaviour switches (environment of the test):
+#   FAKE_DOCKER_INFO_FAIL=1       `docker info` fails (FAKE_DOCKER_INFO_MSG on stderr)
+#   FAKE_DOCKER_SECOPTS=...       what `docker info --format {{.SecurityOptions}}` prints
+#   FAKE_DOCKER_NO_IMAGE=1        image missing until a `tag` / `build` happens
+#   FAKE_DOCKER_IMG_USER=...      Config.User of the image (default: tforward; may be empty)
+#   FAKE_DOCKER_PULL_FAIL=1       `docker pull` fails
+#   FAKE_DOCKER_BUILD_FAIL=1      `docker build` fails
+#   FAKE_DOCKER_RUN_FAIL=1        `docker run` fails
+#   FAKE_DOCKER_RUN_MODE=ready|exited|await_code|hang   what the container does
+#   FAKE_DOCKER_LEARN_PIN=...     container writes this to /auth/learned_servercert
+#   FAKE_DOCKER_KNOWN_HOSTS=...   container writes this to /auth/known_hosts
+#   FAKE_DOCKER_LOG_TEXT=...      output of `docker logs`
+set -u
+
+D=${FAKE_DOCKER_DIR:?FAKE_DOCKER_DIR not set}
+mkdir -p "$D/calls" "$D/containers" "$D/networks"
+
+n=$(find "$D/calls" -type f | wc -l)
+printf -v callfile '%s/calls/%04d' "$D" $((n + 1))
+printf '%s\0' "$@" >"$callfile"
+
+state_get() { sed -n "s/^$2=//p" "$D/containers/$1" 2>/dev/null | head -n 1; }
+
+# the entrypoint reads /auth/code once the CLI delivered it, then reports ready
+maybe_ready() {
+    local authdir
+    authdir=$(state_get "$1" authdir)
+    if [ -n "$authdir" ] && [ -e "$authdir/code" ] && [ ! -e "$authdir/ready" ]; then
+        : >"$authdir/ready"
+    fi
+}
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    info)
+        if [ -n "${FAKE_DOCKER_INFO_FAIL:-}" ]; then
+            echo "${FAKE_DOCKER_INFO_MSG:-Cannot connect to the Docker daemon. Is the docker daemon running?}" >&2
+            exit 1
+        fi
+        case "$*" in
+            *SecurityOptions*) echo "${FAKE_DOCKER_SECOPTS:-[name=seccomp,profile=builtin name=cgroupns]}" ;;
+        esac
+        ;;
+    image)
+        if [ -n "${FAKE_DOCKER_NO_IMAGE:-}" ] && [ ! -e "$D/image-present" ]; then
+            echo "Error: No such image" >&2
+            exit 1
+        fi
+        case "$*" in
+            *Config.User*) echo "${FAKE_DOCKER_IMG_USER-tforward}" ;;
+        esac
+        ;;
+    pull)
+        [ -z "${FAKE_DOCKER_PULL_FAIL:-}" ] || { echo "pull access denied" >&2; exit 1; }
+        ;;
+    tag)
+        : >"$D/image-present"
+        ;;
+    build)
+        [ -z "${FAKE_DOCKER_BUILD_FAIL:-}" ] || { echo "build failed" >&2; exit 1; }
+        : >"$D/image-present"
+        ;;
+    network)
+        sub=${1:-}
+        [ $# -gt 0 ] && shift
+        case "$sub" in
+            inspect) [ -e "$D/networks/${1:-}" ] || exit 1 ;;
+            create)
+                for last in "$@"; do :; done
+                : >"$D/networks/$last"
+                ;;
+            rm) rm -f "$D/networks/${1:-}" ;;
+            ls) ls "$D/networks" ;;
+            *) echo "fake-docker: unhandled: network $sub" >&2; exit 99 ;;
+        esac
+        ;;
+    run)
+        [ -z "${FAKE_DOCKER_RUN_FAIL:-}" ] || {
+            echo "docker: Error response from daemon: driver failed programming external connectivity (port is already allocated)." >&2
+            exit 125
+        }
+        cname="" authdir="" lname="" ltags=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --name) cname=$2; shift 2 ;;
+                -v) case "$2" in *:/auth) authdir=${2%:/auth} ;; esac; shift 2 ;;
+                -l)
+                    case "$2" in
+                        t-forward.name=*) lname=${2#t-forward.name=} ;;
+                        t-forward.tags=*) ltags=${2#t-forward.tags=} ;;
+                    esac
+                    shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        mode=${FAKE_DOCKER_RUN_MODE:-ready}
+        status=running
+        [ "$mode" = exited ] && status=exited
+        printf 'status=%s\nname=%s\ntags=%s\nauthdir=%s\n' "$status" "$lname" "$ltags" "$authdir" \
+            >"$D/containers/$cname"
+        if [ -n "$authdir" ] && [ -d "$authdir" ]; then
+            [ -z "${FAKE_DOCKER_LEARN_PIN:-}" ] || { printf '%s\n' "$FAKE_DOCKER_LEARN_PIN" >"$authdir/learned_servercert"; chmod 600 "$authdir/learned_servercert"; }
+            [ -z "${FAKE_DOCKER_KNOWN_HOSTS:-}" ] || printf '%s\n' "$FAKE_DOCKER_KNOWN_HOSTS" >"$authdir/known_hosts"
+            {
+                printf '. %s\n' "$(stat -c %a "$authdir")"
+                for f in "$authdir"/*; do
+                    [ -f "$f" ] || continue
+                    printf '%s %s %s\n' "$(basename "$f")" "$(stat -c %a "$f")" "$(tr '\n' '|' <"$f")"
+                done
+            } >"$D/snapshot"
+            case "$mode" in
+                ready) : >"$authdir/ready" ;;
+                await_code) : >"$authdir/awaiting_code" ;;
+            esac
+        fi
+        echo "fakecid0123456789"
+        ;;
+    inspect)
+        fmt="" name=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -f|--format) fmt=$2; shift 2 ;;
+                *) name=$1; shift ;;
+            esac
+        done
+        [ -e "$D/containers/$name" ] || { echo "Error: No such object: $name" >&2; exit 1; }
+        maybe_ready "$name"
+        case "$fmt" in
+            *State.Status*)    state_get "$name" status ;;
+            *State.StartedAt*) echo "2026-01-02T03:04:05.678901234Z" ;;
+            '{{.Name}}')       echo "/$name" ;;
+            *Labels*t-forward.name*) state_get "$name" name ;;
+            *Labels*t-forward.tags*) state_get "$name" tags ;;
+        esac
+        ;;
+    rm)
+        for last in "$@"; do :; done
+        rm -f "$D/containers/$last"
+        ;;
+    ps)
+        ls "$D/containers"
+        ;;
+    port)
+        if [ $# -ge 2 ]; then echo "127.0.0.1:55001"; else echo "10001/tcp -> 127.0.0.1:55001"; fi
+        ;;
+    logs)
+        printf '%s\n' "${FAKE_DOCKER_LOG_TEXT:-fake log line}"
+        ;;
+    *)
+        echo "fake-docker: unhandled command: $cmd $*" >&2
+        exit 99
+        ;;
+esac
+exit 0
