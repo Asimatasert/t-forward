@@ -877,6 +877,7 @@ cmd_events() {
         docker logs ${follow:+-f} --tail 40 "$id" 2>&1 | tag_events "$id"
         [ -n "$follow" ] && return 0
     done
+    return 0
 }
 
 # classify [t-forward]/socat/openconnect log lines into event levels
