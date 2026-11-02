@@ -585,12 +585,14 @@ func TestDPTailLogsBroadcastsClassifiedEvents(t *testing.T) {
 }
 
 // A log line longer than the 1 MiB scanner limit stops the scanner early; the
-// pipe must still be drained so the child can exit and tailLogs returns.
+// pipe must still be drained so the child can exit and tailLogs returns. The
+// line must exceed the limit by far more than the 64 KiB pipe buffer, otherwise
+// the leftover fits in the pipe and the test passes even without the drain.
 func TestDPTailLogsOverlongLineDoesNotHang(t *testing.T) {
 	dir := dpTools(t)
 	d, _ := newTestDocker(t)
 	dpOut(t, dir, "logs",
-		"2026-11-02T10:00:00Z before\n"+strings.Repeat("a", 1100000)+"\n2026-11-02T10:00:02Z after\n", 0)
+		"2026-11-02T10:00:00Z before\n"+strings.Repeat("a", 3000000)+"\n2026-11-02T10:00:02Z after\n", 0)
 
 	done := make(chan struct{})
 	go func() { d.tailLogs(t.Context(), "tf-x", "x"); close(done) }()
