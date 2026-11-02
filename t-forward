@@ -22,7 +22,7 @@ VERSION="0.8.0"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
 # published multi-arch image pulled when $IMAGE is missing locally (set empty
 # to force a local build instead)
-HUB_IMAGE="${T_FORWARD_HUB_IMAGE:-asimatasert/t-forward}"
+HUB_IMAGE="${T_FORWARD_HUB_IMAGE-asimatasert/t-forward}"
 CONFIG_DIR="${T_FORWARD_CONFIG_DIR:-$HOME/.config/t-forward}"
 CONF_D="$CONFIG_DIR/conf.d"
 # transient auth files shared with containers; must be under $HOME so Docker
