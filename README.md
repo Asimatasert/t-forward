@@ -476,6 +476,40 @@ Have a question or an idea? Open a
 [Discussion](https://github.com/Asimatasert/t-forward/discussions). Found a
 security issue? See [SECURITY.md](SECURITY.md).
 
+## Use Cases
+
+T-Forward is designed for managing multiple VPN connections and network tunnels from a centralized environment.
+
+Common use cases include:
+
+- Managing multiple VPN connections simultaneously.
+- Connecting to multiple remote networks through isolated VPN environments.
+- Running multiple VPN tunnels on a single server.
+- Managing SSH tunnels and SOCKS5 proxies.
+- Building multi-VPN gateway infrastructures.
+- Centralized VPN and tunnel management.
+- Preventing routing and DNS conflicts between multiple VPN connections.
+
+## Why T-Forward?
+
+Unlike traditional VPN server solutions that primarily focus on providing VPN access to users, T-Forward focuses on managing multiple VPN connections simultaneously.
+
+Its container-based architecture helps isolate VPN connections and provides centralized management for multiple tunnels.
+
+## Project Categories
+
+- Multi-VPN Management
+- VPN Orchestration
+- VPN Gateway
+- Multi-Tunnel Management
+- SSH Tunnel Management
+- SOCKS5 Proxy Management
+- Network Isolation
+
+## Keywords
+
+Multi-VPN, VPN Management, VPN Orchestration, Docker VPN, VPN Gateway, Multiple VPN Connections, SSH Tunnels, SOCKS5 Proxy, Network Isolation.
+
 ## License
 
 [MIT](LICENSE)
