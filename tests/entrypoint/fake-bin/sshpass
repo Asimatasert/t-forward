@@ -1,0 +1,12 @@
+#!/bin/bash
+# fake sshpass: records argv and the password file it was pointed at, then runs
+# the rest of the command line (the fake ssh) in its place, like the real one.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record sshpass "$@"
+if [ "${1:-}" = "-f" ]; then
+    cat "$2" >"$FS/sshpass.password" 2>/dev/null
+    shift 2
+fi
+exec "$@"

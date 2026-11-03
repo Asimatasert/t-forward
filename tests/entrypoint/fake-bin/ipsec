@@ -1,0 +1,45 @@
+#!/bin/bash
+# fake ipsec (strongSwan starter). `ipsec start --nofork` plays charon,
+# `ipsec status` reports the SA once it is "installed". The log texts are
+# modelled on the strings entrypoint.sh greps for.
+#
+# FAKE_IPSEC_MODE:
+#   up         (default) log an established CHILD_SA, run until stopped / TERM
+#   hang       negotiate forever (nothing logged)
+#   xauth      log "XAUTH authentication failed" and keep running
+#   proposal   log NO_PROPOSAL_CHOSEN and keep running
+#   exit       exit at once with FAKE_IPSEC_RC (default 1)
+# FAKE_IPSEC_VIP=1: a virtual IP shows up in `ip -4 addr show` once up.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+
+case "${1:-}" in
+    status)
+        # recorded under its own name: the entrypoint polls it while `start` is
+        # still being launched, so its position among the calls is not fixed
+        record ipsec_status "$@"
+        if [ -e "$FS/ipsec_up" ]; then
+            echo "Security Associations (1 up, 0 connecting):"
+            echo "   tforward[1]: ESTABLISHED 1 second ago"
+            echo "   tforward{1}:  INSTALLED, TUNNEL, reqid 1"
+        else
+            echo "Security Associations (0 up, 1 connecting):"
+        fi
+        exit 0 ;;
+    start) record ipsec "$@" ;;
+    *) echo "fake ipsec: unsupported: $*" >&2; exit 2 ;;
+esac
+
+case "${FAKE_IPSEC_MODE:-up}" in
+    up)
+        echo "charon: 05[IKE] establishing CHILD_SA tforward{1}"
+        [ -z "${FAKE_IPSEC_VIP:-}" ] || touch "$FS/vip"
+        touch "$FS/ipsec_up"
+        linger ipsec stoppable ;;
+    hang)     linger ipsec stoppable ;;
+    xauth)    echo "charon: 07[IKE] XAUTH authentication failed"; linger ipsec stoppable ;;
+    proposal) echo "charon: 09[IKE] received NO_PROPOSAL_CHOSEN notify error"; linger ipsec stoppable ;;
+    exit)     exit "${FAKE_IPSEC_RC:-1}" ;;
+    *) echo "fake ipsec: unknown mode ${FAKE_IPSEC_MODE}" >&2; exit 2 ;;
+esac

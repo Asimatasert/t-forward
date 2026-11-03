@@ -1,0 +1,8 @@
+#!/bin/bash
+# fake oathtool: prints FAKE_OTP (default 654321); FAKE_OATH_FAIL=1 makes it fail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record oathtool "$@"
+[ -z "${FAKE_OATH_FAIL:-}" ] || exit 1
+echo "${FAKE_OTP:-654321}"

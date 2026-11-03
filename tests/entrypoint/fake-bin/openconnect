@@ -1,0 +1,56 @@
+#!/bin/bash
+# fake openconnect. Records its argv, then (like the real one with
+# --passwd-on-stdin) reads the password - and a second line, the verification
+# code, when FAKE_OC_LINES=2 - from stdin into $FAKE_STATE/openconnect.stdin.
+# The output texts are modelled on the strings entrypoint.sh greps for; they
+# were not captured from a real gateway.
+#
+# FAKE_OC_MODE:
+#   up         (default) bring tun0 up, run until stopped / TERM
+#   notun      authenticate but never bring tun0 up
+#   reject     answer with "Login failed" and keep re-prompting (no tun0)
+#   certbad    refuse the certificate (not CA-trusted) and exit 1
+#   certpin    refuse a certificate that does not match --servercert, exit 1
+#   exit       exit at once with FAKE_OC_RC (default 1)
+# FAKE_OC_PIN: the pin a trust-on-first-use probe (--non-inter) prints.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record openconnect "$@"
+
+case " $* " in
+    *" --non-inter "*)   # the TOFU probe: prints the pin and fails
+        if [ -n "${FAKE_OC_PIN:-}" ]; then
+            echo "Connected to HTTPS on vpn.example.com"
+            echo "Certificate from VPN server \"vpn.example.com\" failed verification."
+            echo "Reason: signer not found"
+            echo "To trust this server in future, perhaps add this to your command line:"
+            echo "    --servercert $FAKE_OC_PIN"
+        fi
+        exit 1 ;;
+esac
+
+mode=${FAKE_OC_MODE:-up}
+[ "$mode" != exit ] || exit "${FAKE_OC_RC:-1}"
+
+: >"$FS/openconnect.stdin"
+IFS= read -r -t 10 line && printf '%s\n' "$line" >>"$FS/openconnect.stdin"
+if [ "${FAKE_OC_LINES:-1}" = 2 ]; then
+    IFS= read -r -t 30 line && printf '%s\n' "$line" >>"$FS/openconnect.stdin"
+fi
+
+case "$mode" in
+    up)      touch "$FS/tun0_up"; echo "Established connection"; linger openconnect stoppable ;;
+    notun)   echo "Got CONNECT response: HTTP/1.1 200 OK"; linger openconnect stoppable ;;
+    reject)  echo "Login failed." >&2; echo "Password:"; linger openconnect stoppable ;;
+    certbad)
+        echo "Certificate from VPN server \"vpn.example.com\" failed verification."
+        echo "Reason: signer not found"
+        echo "Enter 'yes' to accept, 'no' to abort; anything else to view: "
+        exit 1 ;;
+    certpin)
+        echo "Server certificate verification failed: specified via --servercert match failed"
+        echo "SSL connection failure: the server's certificate: pin-sha256:PRESENTEDPIN+/="
+        exit 1 ;;
+    *) echo "fake openconnect: unknown mode $mode" >&2; exit 2 ;;
+esac

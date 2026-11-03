@@ -1,0 +1,39 @@
+#!/bin/bash
+# fake ssh. Records its argv and, at call time, the mode and content of the
+# identity file it was given (the entrypoint deletes it later). Like the real
+# one it "binds" every -L / -D listener only after authenticating.
+#
+# FAKE_SSH_MODE:
+#   up        (default) listen on the -L/-D ports, run until stopped / TERM
+#   slow      authenticate but never listen
+#   denied    "Permission denied" and exit 255
+#   hostkey   "REMOTE HOST IDENTIFICATION HAS CHANGED" and exit 255
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record ssh "$@"
+
+ports=()
+prev=""
+for a in "$@"; do
+    case "$prev" in
+        -L) p=${a#*:}; ports+=("${p%%:*}") ;;       # ETH_IP:lport:rhost:rport
+        -D) ports+=("${a##*:}") ;;                  # ETH_IP:1080
+        -i) stat -c %a "$a" >"$FS/ssh.keymode" 2>/dev/null
+            cat "$a" >"$FS/ssh.keycontent" 2>/dev/null ;;
+    esac
+    prev=$a
+done
+
+case "${FAKE_SSH_MODE:-up}" in
+    up)
+        for p in ${ports[@]+"${ports[@]}"}; do echo "$p" >>"$FS/listening"; done
+        linger ssh stoppable ;;
+    slow)    linger ssh stoppable ;;
+    denied)  echo "user@host: Permission denied (publickey,password)." >&2; exit 255 ;;
+    hostkey)
+        echo "@@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@@" >&2
+        echo "Host key verification failed." >&2
+        exit 255 ;;
+    *) echo "fake ssh: unknown mode ${FAKE_SSH_MODE}" >&2; exit 2 ;;
+esac

@@ -1,0 +1,26 @@
+#!/bin/bash
+# fake ip: eth0 always has FAKE_ETH_IP (FAKE_NO_ETH0=1: no address), tun0 has an
+# address once a fake openconnect brought it up ($FAKE_STATE/tun0_up), and the
+# unfiltered listing shows a virtual IP once a fake ipsec installed one
+# ($FAKE_STATE/vip). The output has the shape of `ip -4 addr show`.
+FS=${FAKE_STATE:?FAKE_STATE not set}
+case "$*" in
+    "-4 addr show eth0")
+        [ -z "${FAKE_NO_ETH0:-}" ] || exit 0
+        echo "2: eth0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP"
+        echo "    inet ${FAKE_ETH_IP:-172.17.0.2}/16 brd 172.17.255.255 scope global eth0" ;;
+    "-4 addr show tun0")
+        [ -e "$FS/tun0_up" ] || { echo 'Device "tun0" does not exist.' >&2; exit 1; }
+        echo "3: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN"
+        echo "    inet 10.8.0.2/24 scope global tun0" ;;
+    "-4 addr show")
+        echo "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN"
+        echo "    inet 127.0.0.1/8 scope host lo"
+        echo "2: eth0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP"
+        echo "    inet ${FAKE_ETH_IP:-172.17.0.2}/16 brd 172.17.255.255 scope global eth0"
+        if [ -e "$FS/vip" ]; then
+            echo "3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP"
+            echo "    inet 10.99.0.5/32 scope global eth1"
+        fi ;;
+    *) echo "fake ip: unsupported: $*" >&2; exit 2 ;;
+esac
