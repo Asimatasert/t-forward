@@ -1,0 +1,6 @@
+#!/bin/bash
+# fake id: only `id -u` is used by the entrypoint. FAKE_UID picks the answer
+# (default 10001, the image's unprivileged user).
+[ "${1:-}" = "-u" ] && { echo "${FAKE_UID:-10001}"; exit 0; }
+echo "fake id: unsupported: $*" >&2
+exit 2

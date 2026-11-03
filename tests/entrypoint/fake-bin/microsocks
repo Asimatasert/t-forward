@@ -1,0 +1,8 @@
+#!/bin/bash
+# fake microsocks: records argv, "listens" on :1080, runs until TERM
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record microsocks "$@"
+echo 1080 >>"$FS/listening"
+linger microsocks

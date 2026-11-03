@@ -1,0 +1,10 @@
+#!/bin/bash
+# fake socat: records argv, "listens" on the TCP-LISTEN port, runs until TERM
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record socat "$@"
+for a in "$@"; do
+    case "$a" in TCP-LISTEN:*) p=${a#TCP-LISTEN:}; echo "${p%%,*}" >>"$FS/listening" ;; esac
+done
+linger socat

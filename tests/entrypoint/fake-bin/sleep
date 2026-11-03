@@ -1,0 +1,22 @@
+#!/bin/bash
+# fake sleep. Only the entrypoint's own polling steps are shortened, so the
+# suite finishes quickly; every loop in entrypoint.sh counts iterations, so a
+# shorter step does not change which branch is taken.
+#   sleep 1      -> 0.3 s   (the 1 s polling step of every wait loop)
+#   sleep >=100  -> lasts until its parent is gone or it is sent TERM (the local
+#                   tunnel's `sleep 3600` keep-alive; must never outlive a test)
+#   anything else (the fakes' own 0.1 s ticks) -> the real sleep
+# FAKE_REAL_SLEEP is the absolute path of the real sleep.
+real=${FAKE_REAL_SLEEP:?FAKE_REAL_SLEEP not set}
+case "${1:-}" in
+    1) exec "$real" 0.3 ;;
+    [0-9][0-9][0-9]*)
+        parent=$PPID
+        trap 'exit 143' TERM
+        while kill -0 "$parent" 2>/dev/null; do
+            "$real" 0.1 &
+            wait $!
+        done
+        exit 0 ;;
+    *) exec "$real" "$@" ;;
+esac
