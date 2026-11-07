@@ -99,3 +99,18 @@ jobs:
       - name: tests/cli/run.sh
         # no docker daemon needed: tests/cli/fake-docker stands in for it
         run: bash tests/cli/run.sh -v
+
+  entrypoint-blackbox:
+    name: Entrypoint black-box tests (fake tunnel tools)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck the tests
+        run: shellcheck --severity=warning tests/entrypoint/run.sh tests/entrypoint/fake-bin/*
+      - name: tests/entrypoint/run.sh
+        # no docker, root or network needed: tests/entrypoint/fake-bin stands
+        # in for the tunnel tools (openconnect, ipsec, ssh, socat, ...)
+        run: bash tests/entrypoint/run.sh -v
