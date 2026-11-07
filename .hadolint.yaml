@@ -1,0 +1,10 @@
+# hadolint config (read by the "Dockerfile lint" job in .github/workflows/ci.yml)
+ignored:
+  # DL3018 (pin apk package versions): Alpine drops superseded package versions
+  # from its repositories, so exact pins turn into build failures within weeks.
+  # Reproducibility comes from the base image digest pin in the Dockerfile.
+  - DL3018
+  # DL3066 (non-numeric USER): the user is created with a fixed uid/gid 10001
+  # right above and the image intentionally names it; the host CLI overrides it
+  # with `--user 0` for the vpn tunnel type.
+  - DL3066
