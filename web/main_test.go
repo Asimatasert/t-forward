@@ -708,8 +708,14 @@ func startDaemon(t *testing.T, o startOpts) *daemon {
 			t.Fatalf("daemon exited during startup (%v); output:\n%s", err, out.String())
 		default:
 		}
-		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
-			c.Close()
+		// Probe with a real HTTP request, not a bare TCP dial: dialling a loopback
+		// ephemeral port nobody listens on can "connect" to itself (TCP
+		// simultaneous open from the same source port), which made this wait
+		// return before the daemon was up and the first request fail with
+		// "connection reset by peer".
+		probe := &http.Client{Timeout: 500 * time.Millisecond}
+		if resp, err := probe.Get("http://" + addr + "/healthz"); err == nil {
+			resp.Body.Close()
 			break
 		}
 		if time.Now().After(deadline) {
