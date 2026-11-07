@@ -32,7 +32,11 @@ jobs:
           fi
       - run: go vet ./...
       - run: go build ./...
-      - run: go test ./...
+      - name: go test -race
+        # the race detector needs cgo (gcc is preinstalled on the runner)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
       - name: govulncheck
         # fails on any reachable vulnerability in the stdlib the daemon is
         # built with (the module has no third-party dependencies)
@@ -53,6 +57,19 @@ jobs:
         # gate on warning+; info/style nags are opinionated and vary by
         # shellcheck version, which would make CI flaky across runner updates
         run: shellcheck --severity=warning t-forward entrypoint.sh
+
+  dockerfile-lint:
+    name: Dockerfile lint (hadolint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
 
   python-helpers:
     name: Python helpers (unittest)
