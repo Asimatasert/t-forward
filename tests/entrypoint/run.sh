@@ -154,8 +154,17 @@ ep_alive() { kill -0 "$EP_PID" 2>/dev/null; }
 
 # wait (max 15 s) for the ready marker, delivering the verification code when the
 # entrypoint asks for one, exactly as the host CLI does (printf '%s\n' code > /auth/code)
-settle() { # the relays are backgrounded: wait (max 3 s) until the recorded calls stop growing
-    local i n m=-1 same=0
+settle() { # the relays are backgrounded: wait (max 15 s) until every relay the entrypoint
+    # announced in its log has recorded its call. A fake needs a moment to start (more under
+    # CPU load), so "the recorded calls stopped growing" is no proof that all of them ran.
+    local i want_socat want_socks
+    want_socat=$(grep -c '^\[t-forward\] forward: .*[0-9]$' "$SB/out" 2>/dev/null)
+    want_socks=$(grep -c '^\[t-forward\] SOCKS5 proxy on ' "$SB/out" 2>/dev/null)
+    for ((i = 0; i < 150; i++)); do
+        [ "$(n_calls socat)" -ge "${want_socat:-0}" ] && [ "$(n_calls microsocks)" -ge "${want_socks:-0}" ] && break
+        "$REAL_SLEEP" 0.1
+    done
+    local n m=-1 same=0   # then let any remaining call settle (max 3 s)
     for ((i = 0; i < 30 && same < 3; i++)); do
         n=$(n_calls_all)
         if [ "$n" = "$m" ]; then same=$((same + 1)); else same=0; fi
