@@ -2119,7 +2119,7 @@ function renderTunnel(el) {
   el.innerHTML = `
     <h1>${esc(t.id)} <span class="type-tag ${typeClass}">${esc(String(t.type || "").toUpperCase())}</span></h1>
     <p class="desc">${esc(t.desc || "(no name)")} <button class="edit" data-edit="name" title="Edit name">✎</button></p>
-    <span class="pill ${t.state} ${t.state === "waiting" ? "pulse" : ""}">${pill}</span>
+    <span class="pill ${esc(t.state)} ${t.state === "waiting" ? "pulse" : ""}">${pill}</span>
     <div class="panel-actions">${actions}</div>
     ${badges.trim() ? `<div class="sec">Flags</div><div class="badges">${badges}</div>` : ""}
     <div class="sec">Tags <button class="edit" data-edit="tags" title="Edit tags">✎</button></div>
