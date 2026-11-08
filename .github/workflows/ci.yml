@@ -56,7 +56,7 @@ jobs:
       - name: shellcheck
         # gate on warning+; info/style nags are opinionated and vary by
         # shellcheck version, which would make CI flaky across runner updates
-        run: shellcheck --severity=warning t-forward entrypoint.sh
+        run: shellcheck --severity=warning t-forward entrypoint.sh tests/tofu-restart.sh
 
   dockerfile-lint:
     name: Dockerfile lint (hadolint)
