@@ -131,7 +131,6 @@ func TestHostOnly(t *testing.T) {
 // brackets on, so the value is no longer an IP literal and hostAllowed rejects
 // it.
 func TestHostOnlyBareBracketedIPv6(t *testing.T) {
-	t.Skip("BUG: hostOnly(\"[::1]\") returns \"[::1]\" (brackets kept) so a port-less IPv6 Host header is rejected as a non-IP, non-loopback name")
 	if got := hostOnly("[::1]"); got != "::1" {
 		t.Errorf("hostOnly([::1]) = %q, want ::1", got)
 	}
