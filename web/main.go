@@ -382,10 +382,20 @@ func hostAllowed(host string, allow map[string]bool) bool {
 	return net.ParseIP(host) != nil
 }
 
-// hostOnly strips an optional :port from a host[:port] string.
+// hostOnly strips an optional :port from a host[:port] string. A port-less
+// bracketed IPv6 *loopback* literal ("[::1]", the Host header of a daemon on
+// port 80) is returned without its brackets. Any other bracketed value keeps
+// them on purpose: the brackets make it a non-IP name to hostAllowed, so this
+// never admits a Host that was rejected before.
 func hostOnly(hostport string) string {
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		return h
+	}
+	if n := len(hostport); n > 2 && hostport[0] == '[' && hostport[n-1] == ']' {
+		inner := hostport[1 : n-1]
+		if ip := net.ParseIP(inner); ip != nil && strings.Contains(inner, ":") && ip.IsLoopback() {
+			return inner
+		}
 	}
 	return hostport
 }
