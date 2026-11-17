@@ -1,6 +1,6 @@
 # Base image: a supported Alpine branch, pinned by the multi-arch index digest
 # (bump the tag and the digest together; Dependabot does this).
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS build
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS build
 
 # microsocks (tiny SOCKS5 server) is not packaged in Alpine; build from source.
 # The release tarball is verified against a pinned SHA-256 (tag v1.0.5 is commit
@@ -19,7 +19,7 @@ RUN apk add --no-cache build-base curl \
     && make -C "/tmp/microsocks-${MICROSOCKS_VERSION}" \
     && cp "/tmp/microsocks-${MICROSOCKS_VERSION}/microsocks" /usr/local/bin/microsocks
 
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 # openconnect -> SSL-VPN (fortinet/gp/anyconnect/...); strongswan -> IPsec/IKE
 # (FortiGate dialup: PSK + XAuth), the two families most hospital gateways speak.
