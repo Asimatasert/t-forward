@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +28,16 @@ const (
 	minPINLen     = 6
 	sessionTTL    = 8 * time.Hour
 	maxSessions   = 32
-	lockAfterFail = 5 // consecutive failures before the lockout starts
+	lockAfterFail = 5 // consecutive failures from one client before its lockout starts
 	maxLockout    = 15 * time.Minute
+)
+
+// Ceiling across all clients: far above what one client can reach (its own
+// backoff caps it at a few dozen guesses an hour), so it only trips when many
+// addresses guess in concert. It locks everyone out, the operator too.
+const (
+	globalLockAfterFail = 50
+	maxTrackedClients   = 1024
 )
 
 // hashPIN returns "pbkdf2-sha256$<iter>$<salt>$<key>" with a fresh random salt.
@@ -76,13 +86,22 @@ func verifyPIN(pin, stored string) (ok, legacy bool) {
 	return false, false
 }
 
-// adminGate holds the in-memory admin sessions and the failed-attempt counter.
-// The zero value is ready to use.
+// clientFails is the failed-attempt state of one client address.
+type clientFails struct {
+	fails       int
+	lockedUntil time.Time
+	last        time.Time
+}
+
+// adminGate holds the in-memory admin sessions and the failed-attempt counters:
+// one per client address (so a single client cannot lock the operator out) and
+// a global ceiling. The zero value is ready to use.
 type adminGate struct {
 	mu          sync.Mutex
 	sessions    map[string]time.Time // token -> expiry
-	fails       int
-	lockedUntil time.Time
+	fails       int                  // global, across clients
+	lockedUntil time.Time            // global
+	clients     map[string]*clientFails
 	keySecret   []byte           // derives each session's origin-scoped key; random per process
 	verifyMu    sync.Mutex       // serialises PIN checks: PBKDF2 is costly, attempts are counted in order
 	now         func() time.Time // test hook
@@ -179,25 +198,36 @@ func (g *adminGate) revokeAll() {
 	g.mu.Unlock()
 }
 
-// retryAfter returns the remaining lockout (0 when attempts are allowed).
-func (g *adminGate) retryAfter() time.Duration {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if d := g.lockedUntil.Sub(g.clock()); d > 0 {
-		return d
+// clientKey identifies the caller for throttling: the peer address of the TCP
+// connection, never a forwarded-for header (any client could set those). IPv6
+// peers are grouped by /64, the usual per-subscriber allocation. Behind a
+// reverse proxy or a loopback bind every caller shares one key, which makes the
+// per-client backoff behave like a single counter, never weaker than before.
+func clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return 0
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	ip = ip.Unmap().WithZone("")
+	if ip.Is6() {
+		if p, err := ip.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return ip.String()
 }
 
-func (g *adminGate) recordFailure() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.fails++
-	if g.fails < lockAfterFail {
-		return
+// lockoutFor is the wait after the n-th consecutive failure when the lockout
+// starts at failure `after`: 1s, 2s, 4s ... capped.
+func lockoutFor(n, after int) time.Duration {
+	if n < after {
+		return 0
 	}
-	// 1s, 2s, 4s ... capped: every further failure doubles the wait
-	shift := g.fails - lockAfterFail
+	shift := n - after
 	if shift > 10 {
 		shift = 10
 	}
@@ -205,24 +235,94 @@ func (g *adminGate) recordFailure() {
 	if d > maxLockout {
 		d = maxLockout
 	}
-	g.lockedUntil = g.clock().Add(d)
+	return d
 }
 
-func (g *adminGate) recordSuccess() {
+// retryAfter returns the remaining lockout for client (0 when attempts are
+// allowed): the longer of its own and the global one.
+func (g *adminGate) retryAfter(client string) time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.clock()
+	d := g.lockedUntil.Sub(now)
+	if c := g.clients[client]; c != nil {
+		if cd := c.lockedUntil.Sub(now); cd > d {
+			d = cd
+		}
+	}
+	if d > 0 {
+		return d
+	}
+	return 0
+}
+
+func (g *adminGate) recordFailure(client string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.clock()
+	g.fails++
+	if d := lockoutFor(g.fails, globalLockAfterFail); d > 0 {
+		g.lockedUntil = now.Add(d)
+	}
+	c := g.clients[client]
+	if c == nil {
+		g.evictClients(now)
+		if g.clients == nil {
+			g.clients = map[string]*clientFails{}
+		}
+		c = &clientFails{}
+		g.clients[client] = c
+	}
+	c.fails++
+	c.last = now
+	if d := lockoutFor(c.fails, lockAfterFail); d > 0 {
+		c.lockedUntil = now.Add(d)
+	}
+}
+
+// evictClients keeps the table bounded: it drops idle entries and, when still
+// full, the least recently active one. Caller holds g.mu.
+func (g *adminGate) evictClients(now time.Time) {
+	if len(g.clients) < maxTrackedClients {
+		return
+	}
+	var oldest string
+	var oldestAt time.Time
+	for k, c := range g.clients {
+		if now.After(c.lockedUntil) && now.Sub(c.last) > maxLockout {
+			delete(g.clients, k)
+			continue
+		}
+		if oldest == "" || c.last.Before(oldestAt) {
+			oldest, oldestAt = k, c.last
+		}
+	}
+	if len(g.clients) >= maxTrackedClients {
+		delete(g.clients, oldest)
+	}
+}
+
+func (g *adminGate) recordSuccess(client string) {
 	g.mu.Lock()
 	g.fails = 0
 	g.lockedUntil = time.Time{}
+	delete(g.clients, client)
 	g.mu.Unlock()
 }
 
-// checkPIN verifies a PIN against the stored hash under the lockout. retry > 0
+// checkPIN verifies a PIN against the stored hash under the lockout of client
+// (see clientKey) and the global one. retry > 0
 // means the attempt was refused without being evaluated. A non-nil err means
 // the stored hash could not be loaded: the attempt is refused and, not being a
 // wrong PIN, does not count towards the lockout.
-func (a *Actions) checkPIN(pin string) (ok bool, retry time.Duration, err error) {
+func (a *Actions) checkPIN(pin, client string) (ok bool, retry time.Duration, err error) {
+	// refuse a locked-out client before it queues behind the PBKDF2 mutex
+	if d := a.gate.retryAfter(client); d > 0 {
+		return false, d, nil
+	}
 	a.gate.verifyMu.Lock()
 	defer a.gate.verifyMu.Unlock()
-	if d := a.gate.retryAfter(); d > 0 {
+	if d := a.gate.retryAfter(client); d > 0 {
 		return false, d, nil
 	}
 	s, err := a.readSettings()
@@ -231,10 +331,10 @@ func (a *Actions) checkPIN(pin string) (ok bool, retry time.Duration, err error)
 	}
 	match, legacy := verifyPIN(pin, s.AdminSecretHash)
 	if !match {
-		a.gate.recordFailure()
+		a.gate.recordFailure(client)
 		return false, 0, nil
 	}
-	a.gate.recordSuccess()
+	a.gate.recordSuccess(client)
 	if legacy {
 		a.upgradePINHash(pin, s.AdminSecretHash)
 	}
