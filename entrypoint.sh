@@ -58,6 +58,20 @@ TUN_TIMEOUT="${CONNECT_TIMEOUT:-60}"
 # closed, host crashed) self-terminates instead of blocking forever.
 CODE_TIMEOUT="${CODE_TIMEOUT:-600}"
 
+# Credential files are removed on every way out of this script (a failed start,
+# a tunnel that ended, TERM from `docker stop`), not only after a successful
+# start. KEEP_AUTH=true (restart policy) keeps the ones in /auth because the
+# restarted container reads them again. /etc/ipsec.secrets is rewritten on every
+# start from those, so it never outlives the process. Exit status is unchanged.
+cleanup_secrets() {
+    if [ "${KEEP_AUTH:-false}" != "true" ]; then
+        rm -f "$AUTH/password" "$AUTH/psk" "$AUTH/totp_secret" "$AUTH/ssh_key" \
+              "$AUTH/code" "$PRIV_DIR/ssh_key"
+    fi
+    rm -f /etc/ipsec.secrets
+}
+trap cleanup_secrets EXIT
+
 log() { echo "[t-forward] $*"; }
 
 fail() {
@@ -373,6 +387,11 @@ run_ipsec() {
     # If TOTP is on we wait for the host to deliver the code (same handoff as the
     # openconnect path) and concatenate it, matching the FortiClient behaviour.
     local xpass; xpass=$(cat "$AUTH/password")
+    local pskval; pskval=$(cat "$AUTH/psk")
+    # Both are in memory now: drop the mounted copies right away (not only after
+    # the tunnel is up) so they do not sit on disk while we wait for a code or
+    # after a failed start. A restart policy keeps them (KEEP_AUTH=true).
+    [ "${KEEP_AUTH:-false}" = "true" ] || rm -f "$AUTH/psk" "$AUTH/password"
     if [ "${TOTP:-false}" = "true" ] && [ ! -s "$AUTH/totp_secret" ]; then
         touch "$AUTH/awaiting_code"
         log "XAuth password set; waiting for verification code from the host"
@@ -386,11 +405,15 @@ run_ipsec() {
         rm -f "$AUTH/code" "$AUTH/awaiting_code"
         log "verification code appended to XAuth password"
     elif [ -s "$AUTH/totp_secret" ]; then
-        # base32:SECRET -> generate the current TOTP and append it, no host round-trip
+        # base32:SECRET -> generate the current TOTP and append it, no host round-trip.
+        # The seed goes to oathtool on stdin ("-"), never on its command line,
+        # where every process of the container could read it.
         local secret; secret=$(sed 's/^base32://' "$AUTH/totp_secret")
-        local otp; otp=$(oathtool --totp -b "$secret" 2>/dev/null) \
+        local otp; otp=$(printf '%s\n' "$secret" | oathtool --totp -b - 2>/dev/null) \
             && [ -n "$otp" ] && xpass="${xpass}${otp}" \
             && log "generated TOTP appended to XAuth password"
+        secret=""
+        [ "${KEEP_AUTH:-false}" = "true" ] || rm -f "$AUTH/totp_secret"
     fi
 
     # ipsec.conf / ipsec.secrets are line-oriented: a value with a line break would
@@ -406,7 +429,8 @@ run_ipsec() {
     ipsec_field_ok IPSEC_IKELIFETIME "${IPSEC_IKELIFETIME:-28800s}" '^[0-9]+[smhd]?$'
     ipsec_field_ok IPSEC_LIFETIME "${IPSEC_LIFETIME:-43200s}" '^[0-9]+[smhd]?$'
     local psk_q xpass_q
-    ipsec_quote PSK "$(cat "$AUTH/psk")"; psk_q=$IPSEC_QUOTED
+    ipsec_quote PSK "$pskval"; psk_q=$IPSEC_QUOTED
+    pskval=""
     ipsec_quote "XAuth password" "$xpass"; xpass_q=$IPSEC_QUOTED
 
     # leftid: the Local ID / peer-ID the gateway expects (often the group name).
@@ -415,15 +439,16 @@ run_ipsec() {
     [ -n "${IPSEC_LOCALID:-}" ]  && leftid_line="    leftid=${IPSEC_LOCALID}"
     [ -n "${IPSEC_REMOTEID:-}" ] && rightid_line="    rightid=${IPSEC_REMOTEID}"
 
-    # ipsec.secrets: the PSK (IKE) and the XAuth credential. 0600, root-only.
+    # ipsec.secrets: the PSK (IKE) and the XAuth credential. Mode 0600, root
+    # only (umask 077, then chmod to be explicit about it). It stays while
+    # strongSwan runs, because the starter may re-read it when it restarts or
+    # reloads charon. cleanup_secrets (EXIT trap) removes it when this script ends.
     umask 077
     {
         printf ': PSK %s\n' "$psk_q"
         printf '%s : XAUTH %s\n' "$VPN_USER" "$xpass_q"
     } > /etc/ipsec.secrets
-    # psk on disk is now in ipsec.secrets only; drop the mounted copy unless a
-    # restart policy needs it to reconnect after a crash.
-    [ "${KEEP_AUTH:-false}" = "true" ] || rm -f "$AUTH/psk" "$AUTH/password"
+    chmod 600 /etc/ipsec.secrets
 
     cat > /etc/ipsec.conf <<EOF
 config setup

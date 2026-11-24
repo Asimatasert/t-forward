@@ -4,5 +4,9 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=_common.sh
 . "$here/_common.sh"
 record oathtool "$@"
+# a KEY argument of "-" is read from stdin, as the real tool does
+for a in "$@"; do
+    [ "$a" != "-" ] || cat >"$FS/oathtool.stdin"
+done
 [ -z "${FAKE_OATH_FAIL:-}" ] || exit 1
 echo "${FAKE_OTP:-654321}"

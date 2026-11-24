@@ -468,6 +468,15 @@ Update the CLI and run `t-forward build` together.
   `--totp-secret-file PATH`, or keep them in the (mode `600`) config.
 - Configs hold plaintext credentials; they are kept at mode `600` and the
   `.gitignore` excludes real config directories. Keep them out of version control.
+- **Credentials inside the container.** The mounted auth dir files (`password`,
+  `psk`, `totp_secret`, `ssh_key`, `code`) are removed as soon as they are
+  consumed and again on every exit path (failed start, `docker stop`, tunnel
+  ended), unless a restart policy (`--restart`) needs them to reconnect. For
+  `protocol: ipsec` strongSwan reads its credentials from `/etc/ipsec.secrets`
+  inside the container (mode `0600`, root only; the PSK and the XAuth
+  password). That file has to exist while the tunnel runs, so it stays until the
+  container process ends and is then removed; it is rewritten on every start. A
+  TOTP seed is handed to the code generator on stdin, never on a command line.
 - Panel config edits are whitelisted and injection-safe, and never modify the
   password / servercert / totp_secret / ssh key.
 - The admin PIN (settings / config writes) must be at least 6 characters. It is
