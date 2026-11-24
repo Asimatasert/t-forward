@@ -189,7 +189,7 @@ func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool
 		return true // first-run bootstrap
 	}
 	if hdr := r.Header.Get("X-Admin-Token"); hdr != "" {
-		ok, retry, err := a.checkPIN(hdr)
+		ok, retry, err := a.checkPIN(hdr, clientKey(r))
 		if err != nil {
 			settingsUnavailable(w)
 			return false
@@ -290,7 +290,7 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 				if in.CurrentPin != nil {
 					given = *in.CurrentPin
 				}
-				ok, retry, err := a.checkPIN(given)
+				ok, retry, err := a.checkPIN(given, clientKey(r))
 				if err != nil {
 					settingsUnavailable(w)
 					return
@@ -381,7 +381,7 @@ func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "wrong pin"})
 		return
 	}
-	ok, retry, err := a.checkPIN(pin)
+	ok, retry, err := a.checkPIN(pin, clientKey(r))
 	if err != nil {
 		settingsUnavailable(w)
 		return

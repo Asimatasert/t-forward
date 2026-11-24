@@ -487,7 +487,13 @@ Update the CLI and run `t-forward build` together.
 - The admin PIN (settings / config writes) must be at least 6 characters. It is
   stored as a salted PBKDF2 hash, unlocking issues a random 8-hour session
   (never the PIN itself in the cookie), and repeated wrong PINs lock the unlock
-  endpoint out with an increasing delay. Replacing an existing PIN also needs
+  endpoint out with an increasing delay. The delay is tracked per client
+  address (the peer address of the connection; `X-Forwarded-For` and similar
+  headers are ignored, IPv6 peers are grouped by /64), so one client guessing
+  cannot lock the operator out from another address. A global ceiling of 50
+  consecutive failures across all clients still locks everyone out, with the
+  same growing delay. Behind a reverse proxy, or on a loopback bind, all callers
+  share the proxy's (or loopback) address and therefore one counter. Replacing an existing PIN also needs
   the current one (`currentPin` in the `POST /settings` body; the panel has a
   "Current PIN" field), so a live session alone cannot take the PIN over; a
   wrong current PIN counts towards the same lockout. Setting the first PIN is

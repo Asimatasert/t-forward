@@ -132,32 +132,32 @@ func TestAGLockoutStartsAtFifthFailureDoublesAndCaps(t *testing.T) {
 	g := &a.gate
 
 	for i := 1; i < lockAfterFail; i++ {
-		g.recordFailure()
-		if d := g.retryAfter(); d != 0 {
+		g.recordFailure(testClient)
+		if d := g.retryAfter(testClient); d != 0 {
 			t.Fatalf("failure %d locked out for %v, want no lockout before %d", i, d, lockAfterFail)
 		}
 	}
-	g.recordFailure() // 5th
-	if d := g.retryAfter(); d != time.Second {
+	g.recordFailure(testClient) // 5th
+	if d := g.retryAfter(testClient); d != time.Second {
 		t.Fatalf("5th failure lockout = %v, want 1s", d)
 	}
-	g.recordFailure() // 6th
-	if d := g.retryAfter(); d != 2*time.Second {
+	g.recordFailure(testClient) // 6th
+	if d := g.retryAfter(testClient); d != 2*time.Second {
 		t.Fatalf("6th failure lockout = %v, want 2s", d)
 	}
 	for i := 0; i < 20; i++ { // far beyond the shift limit
-		g.recordFailure()
+		g.recordFailure(testClient)
 	}
-	if d := g.retryAfter(); d != maxLockout {
+	if d := g.retryAfter(testClient); d != maxLockout {
 		t.Fatalf("lockout after many failures = %v, want the %v cap", d, maxLockout)
 	}
 	*clock = clock.Add(maxLockout + time.Second)
-	if d := g.retryAfter(); d != 0 {
+	if d := g.retryAfter(testClient); d != 0 {
 		t.Errorf("lockout still %v after it elapsed", d)
 	}
-	g.recordSuccess()
-	g.recordFailure()
-	if d := g.retryAfter(); d != 0 {
+	g.recordSuccess(testClient)
+	g.recordFailure(testClient)
+	if d := g.retryAfter(testClient); d != 0 {
 		t.Errorf("a success must reset the counter; got lockout %v", d)
 	}
 }
@@ -166,12 +166,12 @@ func TestAGCheckPINRefusesWhileLockedWithoutEvaluating(t *testing.T) {
 	a, _ := newTestActions(t)
 	setPIN(t, a, "654321")
 	for i := 0; i < lockAfterFail; i++ {
-		if ok, retry, err := a.checkPIN("wrong-pin"); err != nil || ok || retry != 0 {
+		if ok, retry, err := a.checkPIN("wrong-pin", testClient); err != nil || ok || retry != 0 {
 			t.Fatalf("attempt %d = (%v, %v), want (false, 0)", i+1, ok, retry)
 		}
 	}
 	// locked now: even the right PIN is refused, with the wait reported
-	if ok, retry, err := a.checkPIN("654321"); err != nil || ok || retry <= 0 {
+	if ok, retry, err := a.checkPIN("654321", testClient); err != nil || ok || retry <= 0 {
 		t.Fatalf("locked checkPIN = (%v, %v), want (false, >0)", ok, retry)
 	}
 }
