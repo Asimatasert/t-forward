@@ -3,8 +3,8 @@ package main
 // Static guards for the panel's innerHTML output escaping. The panel
 // (panel/index.html) renders daemon/config-derived text (tunnel ids, notes,
 // hosts, SSE event text, scan results) through innerHTML, so every such value
-// must pass through esc() first. Inventory: see the PR description
-// (23 innerHTML sites, one missing escape found and fixed: `pill ${t.state}`).
+// must pass through esc() first. TestTEscInnerHTMLSiteCount holds the audited
+// number of innerHTML sites.
 //
 // All identifiers carry the tEsc prefix to stay clear of other test files.
 
@@ -114,13 +114,13 @@ func TestTEscPinnedInterpolations(t *testing.T) {
 	}
 }
 
-// The inventory in the PR covers exactly the current innerHTML sites. A new
-// one must be audited (and the inventory + this number updated) on purpose.
+// The audited count below covers exactly the current innerHTML sites. A new
+// one must be audited on purpose, then this number updated.
 func TestTEscInnerHTMLSiteCount(t *testing.T) {
 	src := tEscPanel(t)
 	n := len(regexp.MustCompile(`\.innerHTML\s*=`).FindAllStringIndex(src, -1))
 	if n != 23 {
-		t.Errorf("panel/index.html has %d innerHTML assignments, audited 23: audit the new/removed site for esc() and update panel-esc-envanter.md + this count", n)
+		t.Errorf("panel/index.html has %d innerHTML assignments, audited 23: audit the new/removed site for esc() and update this count and the pinned list in TestTEscPinnedInterpolations", n)
 	}
 	for _, sink := range []string{".outerHTML", "insertAdjacentHTML", "document.write(", "eval("} {
 		if strings.Contains(src, sink) {
