@@ -358,7 +358,9 @@ through the tunnel, and the container's network namespace routes packets
 tunnel starts:
 
 - replies to connections the container opened itself are accepted (connection
-  tracking), so the tunnel's own traffic is not affected;
+  tracking), together with the ICMP errors related to them (path-MTU discovery,
+  unreachables), so the tunnel's own traffic is not affected; no other kind of
+  related packet is accepted from the tunnel side;
 - anything else addressed to the `eth0` address is dropped unless it came in on
   `eth0` (for IPsec, which has no tunnel interface: unless it came in outside
   the IPsec tunnel);
@@ -367,7 +369,10 @@ tunnel starts:
 
 The far side of a tunnel can therefore neither open a connection to a forward or
 the SOCKS proxy nor send packets through the container. If the filter cannot be
-loaded the container refuses to start (see [Requirements](#requirements)). The
+loaded the container refuses to start (see [Requirements](#requirements)). A host
+whose kernel cannot load the filter therefore cannot run `vpn` tunnels at all,
+and there is deliberately no option to run without it; `ssh` and `local` tunnels
+are not affected. The
 filter ships in the image: after updating, re-pull it or run `t-forward build` -
 an older local image keeps running without it. The
 host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)

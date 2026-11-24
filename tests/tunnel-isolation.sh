@@ -171,6 +171,10 @@ echo "# tunnel container: eth0 $eth_ip (published side), tun0 192.0.2.1 (far sid
 echo "# rp_filter all/eth0/tun0: $(docker exec "$TUNNEL" sh -c \
     'cat /proc/sys/net/ipv4/conf/all/rp_filter /proc/sys/net/ipv4/conf/eth0/rp_filter /proc/sys/net/ipv4/conf/tun0/rp_filter' | tr '\n' ' ')"
 docker exec "$TUNNEL" nft list table inet tforward 2>/dev/null | sed 's/^/#   /'
+docker exec "$TUNNEL" nft list table inet tforward 2>/dev/null | grep -q 'ct state related meta l4proto icmp accept'
+check "the loaded filter accepts related packets for ICMP only" $?
+! docker exec "$TUNNEL" nft list table inet tforward 2>/dev/null | grep -q 'ct state related accept'
+check "the loaded filter has no catch-all 'ct state related accept'" $?
 
 # The peer sends TCP for the tunnel container's eth0 address into the tunnel
 # (everything else, including the tunnel's own UDP transport, stays on eth0).

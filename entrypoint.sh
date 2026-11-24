@@ -140,7 +140,9 @@ ETH_IP=$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)
 #
 # input:
 #   - Replies to connections this container opened itself (and ICMP errors
-#     related to them) are accepted first. That matters when the tunnel's own
+#     related to them - only ICMP: path-MTU discovery and unreachables still
+#     work, but no other kind of "related" packet is let in from the far side)
+#     are accepted first. That matters when the tunnel's own
 #     source address IS the eth0 address - an IPsec gateway that assigns no
 #     virtual IP, or any gateway that hands out that very address: the return
 #     traffic of every forward is then addressed to the eth0 address and must
@@ -168,7 +170,7 @@ table inet tforward {
     chain input {
         type filter hook input priority 0; policy accept;
         ct state established ct direction reply accept
-        ct state related accept
+        ct state related meta l4proto icmp accept
         iifname != { "eth0", "lo" } ip daddr ${ETH_IP} drop
         ${ipsec_rule}
     }

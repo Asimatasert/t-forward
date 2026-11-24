@@ -580,11 +580,11 @@ check "nft ran before openconnect" test "$(call_file nft 1)" '<' "$(call_file op
 R="$SB/state/nft.rules"
 file_has "$R" "        type filter hook input priority 0; policy accept;"
 file_has "$R" "        ct state established ct direction reply accept"
-file_has "$R" "        ct state related accept"
+file_has "$R" "        ct state related meta l4proto icmp accept"; file_lacks "$R" "ct state related accept"
 file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
 file_has "$R" "        type filter hook forward priority 0; policy drop;"
 check "return traffic is accepted before anything is dropped" \
-    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+    test "$(grep -n 'ct state related meta l4proto icmp accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
 file_lacks "$R" "ipsec"   # openconnect must not depend on the kernel's IPsec match
 out_has "[t-forward] tunnel filter installed: $ETH accepts new connections arriving on eth0 only; nothing is forwarded"
 
@@ -762,12 +762,12 @@ rc 0; argv_any socat -d -d "TCP-LISTEN:2222,bind=$ETH,fork,reuseaddr" TCP:10.0.0
 argv nft 1 -f -; check "nft ran before charon" test "$(call_file nft 1)" '<' "$(call_file ipsec 1)"
 R="$SB/state/nft.rules"
 file_has "$R" "        ct state established ct direction reply accept"
-file_has "$R" "        ct state related accept"
+file_has "$R" "        ct state related meta l4proto icmp accept"; file_lacks "$R" "ct state related accept"
 file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
 file_has "$R" "        meta ipsec exists ip daddr $ETH drop"
 file_has "$R" "        type filter hook forward priority 0; policy drop;"
 check "return traffic is accepted before anything is dropped" \
-    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+    test "$(grep -n 'ct state related meta l4proto icmp accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
 
 begin "ipsec: the filter cannot be installed -> refuses to start, nothing is exposed"
 cfg_ipsec; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true FAKE_NFT_FAIL=1; run_ep
