@@ -17,6 +17,10 @@ import (
 
 func settingsFile(e *actEnv) string { return filepath.Join(e.root, "settings.json") }
 
+// loadSettings is the lenient read (defaults when the file is unusable); the
+// daemon's gate and writers use readSettings, which reports that case.
+func (a *Actions) loadSettings() Settings { return loadSettingsFor(a.docker.confDir) }
+
 // postSettings POSTs body to handleSettings with an optional admin cookie /
 // header, going through the same handler the mux registers.
 func (e *actEnv) postSettings(body string, hdr map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {

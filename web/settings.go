@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 )
 
 // Settings is the daemon's persisted configuration blob (Telegram / Claude
@@ -60,16 +67,67 @@ func settingsPathFor(confDir string) string {
 	return filepath.Join(filepath.Dir(confDir), "settings.json")
 }
 
-func loadSettingsFor(confDir string) Settings {
+// readSettingsFor loads settings.json. Only a file that does not exist is the
+// first run (zero Settings, nil error). A file that exists but cannot be read
+// or parsed is an error, never "no PIN set": the admin gate has to fail closed
+// on it, and no caller may save over it. The error (logged here) names the
+// path and the cause but never the file's contents.
+func readSettingsFor(confDir string) (Settings, error) {
 	var s Settings
-	if b, err := os.ReadFile(settingsPathFor(confDir)); err == nil {
-		_ = json.Unmarshal(b, &s)
+	path := settingsPathFor(confDir)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return s, nil
 	}
+	if err == nil && (json.Unmarshal(b, &s) != nil || bytes.Equal(bytes.TrimSpace(b), []byte("null"))) {
+		// json's own message can quote bytes of the file, so it is not used
+		err = fmt.Errorf("parse %s: not a valid settings JSON object (%d bytes)", path, len(b))
+	}
+	if err != nil {
+		logSettingsErr(err)
+		return Settings{}, err
+	}
+	return s, nil
+}
+
+// loadSettingsFor is for readers outside the admin gate: an unusable file
+// degrades to the defaults (nothing configured, nothing enabled). Never use it
+// to decide whether a PIN is set, or as the base of a save.
+func loadSettingsFor(confDir string) Settings {
+	s, _ := readSettingsFor(confDir)
 	return s
 }
 
-func (a *Actions) settingsPath() string   { return settingsPathFor(a.docker.confDir) }
-func (a *Actions) loadSettings() Settings { return loadSettingsFor(a.docker.confDir) }
+// logSettingsErr reports an unusable settings file, at most once a minute per
+// distinct error (notifyState reads the file on hot paths).
+func logSettingsErr(err error) {
+	settingsErrLog.mu.Lock()
+	defer settingsErrLog.mu.Unlock()
+	msg, now := err.Error(), time.Now()
+	if msg == settingsErrLog.msg && now.Sub(settingsErrLog.at) < time.Minute {
+		return
+	}
+	settingsErrLog.msg, settingsErrLog.at = msg, now
+	log.Printf("settings: %s; privileged panel actions are refused until the file is repaired or restored", msg)
+}
+
+var settingsErrLog struct {
+	mu  sync.Mutex
+	msg string
+	at  time.Time
+}
+
+// settingsUnavailable answers a request that needs settings.json while the
+// file is unusable. The detail stays in the daemon log.
+func settingsUnavailable(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"ok":    false,
+		"error": "settings file is unreadable or corrupt; privileged actions are disabled until it is repaired (see the daemon log)",
+	})
+}
+
+func (a *Actions) settingsPath() string            { return settingsPathFor(a.docker.confDir) }
+func (a *Actions) readSettings() (Settings, error) { return readSettingsFor(a.docker.confDir) }
 
 func (a *Actions) saveSettings(s Settings) error {
 	b, err := json.MarshalIndent(s, "", "  ")
@@ -78,7 +136,9 @@ func (a *Actions) saveSettings(s Settings) error {
 	}
 	path := a.settingsPath()
 	// Unique temp name in the same dir (os.CreateTemp yields mode 0600) so
-	// concurrent writers never clobber a shared ".tmp"; rename is atomic.
+	// concurrent writers never clobber a shared ".tmp"; rename is atomic. The
+	// data is synced before the rename so a crash cannot leave a truncated
+	// settings.json behind (which would lock the admin gate, see above).
 	f, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
 	if err != nil {
 		return err
@@ -89,21 +149,40 @@ func (a *Actions) saveSettings(s Settings) error {
 		f.Close()
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// best effort: make the rename itself durable
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // requirePrivileged reports whether the request may perform a privileged action.
 // It writes a 403 (with needPin) and returns false when the admin gate rejects
-// it. While no admin PIN is set (first run) everything is open so the PIN can be
+// it, or a 503 when settings.json exists but cannot be read or parsed (fail
+// closed: an unknown PIN state is not "no PIN", and not even a live session
+// passes). While no admin PIN is set (first run: no settings.json, or one
+// without a hash) everything is open so the PIN can be
 // established; once set, a session token (tf_admin cookie or X-Admin-Token
 // header, minted by /admin/unlock) is required. API clients may also send the
 // PIN itself in X-Admin-Token; that path is subject to the same lockout as
 // /admin/unlock. The cookie only ever carries a session token, never the PIN.
 func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool {
-	s := a.loadSettings()
+	s, err := a.readSettings()
+	if err != nil {
+		settingsUnavailable(w)
+		return false
+	}
 	if s.AdminSecretHash == "" {
 		return true // first-run bootstrap
 	}
@@ -111,7 +190,11 @@ func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool
 		if a.gate.validSession(hdr) {
 			return true
 		}
-		ok, retry := a.checkPIN(hdr)
+		ok, retry, err := a.checkPIN(hdr)
+		if err != nil {
+			settingsUnavailable(w)
+			return false
+		}
 		if ok {
 			return true
 		}
@@ -147,7 +230,12 @@ func (a *Actions) privileged(h http.HandlerFunc) http.HandlerFunc {
 func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s := a.loadSettings()
+		s, err := a.readSettings()
+		if err != nil {
+			// no flags at all: "adminSet": false would offer to set a PIN
+			settingsUnavailable(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"adminSet":           s.AdminSecretHash != "",
 			"telegramConfigured": s.Telegram.BotToken != "" && s.Telegram.ChatID != "",
@@ -189,7 +277,13 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// Serialize the whole load->mutate->save so two concurrent POSTs can't
 		// each read the old blob and lose one another's field updates.
 		a.mu.Lock()
-		s := a.loadSettings()
+		s, err := a.readSettings()
+		if err != nil {
+			// never save defaults over a file that could not be loaded
+			a.mu.Unlock()
+			settingsUnavailable(w)
+			return
+		}
 		if newPin {
 			s.AdminSecretHash = hashPIN(*in.AdminPin)
 		}
@@ -214,7 +308,7 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if in.Notify != nil {
 			s.Notify = *in.Notify
 		}
-		err := a.saveSettings(s)
+		err = a.saveSettings(s)
 		a.mu.Unlock()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
@@ -240,7 +334,11 @@ func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s := a.loadSettings()
+	s, err := a.readSettings()
+	if err != nil {
+		settingsUnavailable(w)
+		return
+	}
 	if s.AdminSecretHash == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "adminSet": false})
 		return
@@ -250,7 +348,11 @@ func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "wrong pin"})
 		return
 	}
-	ok, retry := a.checkPIN(pin)
+	ok, retry, err := a.checkPIN(pin)
+	if err != nil {
+		settingsUnavailable(w)
+		return
+	}
 	if retry > 0 {
 		lockedResponse(w, retry)
 		return

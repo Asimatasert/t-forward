@@ -454,7 +454,10 @@ Update the CLI and run `t-forward build` together.
   stored as a salted PBKDF2 hash, unlocking issues a random 8-hour session
   (never the PIN itself in the cookie), and repeated wrong PINs lock the unlock
   endpoint out with an increasing delay. Hashes written by older versions are
-  upgraded on the next successful unlock.
+  upgraded on the next successful unlock. Only a missing `settings.json` counts
+  as "no PIN set yet": if the file exists but cannot be read or parsed, the
+  panel refuses every PIN-protected action (HTTP 503) and will not set a new
+  PIN until you repair or restore the file; the daemon log says why.
 - The local SOCKS5 proxy (`socks:`) has no authentication and is published on
   `127.0.0.1`: every user/process on that host can use it to reach the tunnel's
   network. Fine on a single-user workstation; on a shared host, don't enable it.

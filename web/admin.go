@@ -188,24 +188,29 @@ func (g *adminGate) recordSuccess() {
 }
 
 // checkPIN verifies a PIN against the stored hash under the lockout. retry > 0
-// means the attempt was refused without being evaluated.
-func (a *Actions) checkPIN(pin string) (ok bool, retry time.Duration) {
+// means the attempt was refused without being evaluated. A non-nil err means
+// the stored hash could not be loaded: the attempt is refused and, not being a
+// wrong PIN, does not count towards the lockout.
+func (a *Actions) checkPIN(pin string) (ok bool, retry time.Duration, err error) {
 	a.gate.verifyMu.Lock()
 	defer a.gate.verifyMu.Unlock()
 	if d := a.gate.retryAfter(); d > 0 {
-		return false, d
+		return false, d, nil
 	}
-	s := a.loadSettings()
+	s, err := a.readSettings()
+	if err != nil {
+		return false, 0, err
+	}
 	match, legacy := verifyPIN(pin, s.AdminSecretHash)
 	if !match {
 		a.gate.recordFailure()
-		return false, 0
+		return false, 0, nil
 	}
 	a.gate.recordSuccess()
 	if legacy {
 		a.upgradePINHash(pin, s.AdminSecretHash)
 	}
-	return true, 0
+	return true, 0, nil
 }
 
 // upgradePINHash replaces a legacy SHA-256 hash with a salted PBKDF2 one after a
@@ -213,9 +218,9 @@ func (a *Actions) checkPIN(pin string) (ok bool, retry time.Duration) {
 func (a *Actions) upgradePINHash(pin, oldHash string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := a.loadSettings()
-	if s.AdminSecretHash != oldHash {
-		return
+	s, err := a.readSettings()
+	if err != nil || s.AdminSecretHash != oldHash {
+		return // never save over a file that could not be loaded
 	}
 	s.AdminSecretHash = hashPIN(pin)
 	_ = a.saveSettings(s)

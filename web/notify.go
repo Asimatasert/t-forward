@@ -77,7 +77,7 @@ func sendTelegram(token, chatID, threadID, text string) error {
 // hot paths (state broadcasts, log tailing) that must never block on a
 // network request.
 func (d *Docker) notifyState(kind, tun, text string) {
-	s := loadSettingsFor(d.confDir)
+	s := loadSettingsFor(d.confDir) // unusable file: defaults, i.e. no notification
 	enabled := map[string]bool{"down": s.Notify.Down, "up": s.Notify.Up, "warn": s.Notify.Warn, "reach": s.Notify.Reach}[kind]
 	if !enabled || s.Telegram.BotToken == "" || s.Telegram.ChatID == "" {
 		return
@@ -103,7 +103,11 @@ func (a *Actions) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := decodeBody(r)
-	s := a.loadSettings()
+	s, err := a.readSettings()
+	if err != nil {
+		settingsUnavailable(w)
+		return
+	}
 	token, chatID := body["telegramToken"], body["telegramChatId"]
 	if token == "" {
 		token = s.Telegram.BotToken
