@@ -21,7 +21,54 @@ class Text(HTMLParser):
         self.parts.append(data)
 
 
-def extract_code(raw):
+KEYWORD = re.compile(
+    r"(?<![a-z])(?:code|otp|passcode|pin|token|verification|kod|kodu)(?![a-z])",
+    re.I)
+CANDIDATE = re.compile(r"(?<![0-9])[0-9]{4,8}(?![0-9])")
+# Characters that join digit groups into dates, times, phone numbers, amounts.
+JOINERS = "-./:,"
+
+
+def standalone(text, match):
+    """True when the digit run is not part of a date, phone number or amount."""
+    start, end = match.span()
+    before = text[start - 1] if start else ""
+    after = text[end] if end < len(text) else ""
+    if before in "+$#\u20ac\u00a3" and before:
+        return False
+    if before and before in JOINERS and start > 1 and text[start - 2].isdigit():
+        return False
+    if after and after in JOINERS and end + 1 < len(text) and text[end + 1].isdigit():
+        return False
+    return True
+
+
+def rank(text, match):
+    """0: code keyword just before the number, 1: just after it, 2: none.
+
+    Only the text up to the neighbouring digit run counts, so a keyword that
+    belongs to another number does not promote this one.
+    """
+    start, end = match.span()
+    prev = re.search(r"[0-9]", text[max(0, start - 40):start][::-1])
+    before = text[max(0, start - 40):start]
+    if prev:
+        before = before[len(before) - prev.start():]
+    if KEYWORD.search(before):
+        return 0
+    after = text[end:end + 25]
+    nxt = re.search(r"[0-9]", after)
+    if nxt:
+        after = after[:nxt.start()]
+    if KEYWORD.search(after):
+        return 1
+    return 2
+
+
+def extract_code(raw, length=None):
+    """Best code in the mail: keyword-adjacent standalone numbers first, then
+    the first standalone number; `length` demands that exact digit count."""
+    best = None
     msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(raw)
     for part in msg.walk():
         if part.get_content_disposition() == "attachment":
@@ -33,10 +80,17 @@ def extract_code(raw):
             parser = Text()
             parser.feed(body)
             body = " ".join(parser.parts)
-        match = re.search(r"(?<![0-9])[0-9]{4,8}(?![0-9])", body)
-        if match:
-            return match.group()
-    return ""
+        for match in CANDIDATE.finditer(body):
+            if length and len(match.group()) != length:
+                continue
+            if not standalone(body, match):
+                continue
+            tier = rank(body, match)
+            if best is None or tier < best[0]:
+                best = (tier, match.group())
+            if tier == 0:
+                return best[1]
+    return best[1] if best else ""
 
 
 def quoted(value):
@@ -71,7 +125,7 @@ def fetch_code(client, config, since):
             received = imaplib.Internaldate2tuple(item[0])
             if received is None or time.mktime(received) < since:
                 continue
-            code = extract_code(item[1])
+            code = extract_code(item[1], config.get("code_length"))
             if code:
                 return code
     return ""
@@ -84,6 +138,10 @@ def main():
     tls = config.get("tls", True)
     if not isinstance(tls, bool):
         raise ValueError("invalid TLS setting")
+    length = config.get("code_length")
+    if length is not None and (isinstance(length, bool) or not isinstance(length, int)
+                               or not 4 <= length <= 8):
+        raise ValueError("invalid code length")
     marker = Path(sys.argv[1])
     original = marker.stat()
     # Allow delivery just before the gateway announces its prompt, but no old mail.

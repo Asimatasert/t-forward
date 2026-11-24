@@ -555,5 +555,86 @@ class ScriptEntrypointTests(unittest.TestCase):
         self.assertEqual((res.returncode, res.stdout, res.stderr), (1, "", ""))
 
 
+# --- misleading numbers and the code_length option ---------------------------
+
+def mail(body):
+    return b"\r\n" + body.encode()
+
+
+class CodeSelectionTests(unittest.TestCase):
+    def test_keyword_number_beats_earlier_unrelated_number(self):
+        self.assertEqual(totp_imap.extract_code(
+            mail("Order 20261124 confirmed. Your verification code is 654321.")), "654321")
+        self.assertEqual(totp_imap.extract_code(
+            mail("Copyright 2026 Example. OTP: 112233")), "112233")
+
+    def test_number_followed_by_keyword_beats_plain_number(self):
+        self.assertEqual(totp_imap.extract_code(
+            mail("Ref 98765 - 246810 is your code")), "246810")
+
+    def test_keyword_of_another_number_does_not_promote(self):
+        # "code" sits between 20261124 and 654321; it belongs to the latter.
+        self.assertEqual(totp_imap.extract_code(
+            mail("Order 20261124 code 654321")), "654321")
+
+    def test_keyword_in_html_part_wins_over_plain_part_number(self):
+        raw = (b"Content-Type: multipart/alternative; boundary=B\r\n\r\n"
+               b"--B\r\nContent-Type: text/plain\r\n\r\nCall 77777 today\r\n"
+               b"--B\r\nContent-Type: text/html\r\n\r\n<p>Code: <b>505050</b></p>\r\n--B--\r\n")
+        self.assertEqual(totp_imap.extract_code(raw), "505050")
+
+    def test_dates_phone_numbers_and_amounts_are_not_codes(self):
+        for body in ("Date 2026-11-25", "on 25.11.2026", "at 10:3045:12",
+                     "call 555-0100", "call 0555.1234", "total 1234.56 USD",
+                     "total 1,2345", "call +441234", "paid $5000", "ticket #4567"):
+            with self.subTest(body=body):
+                self.assertEqual(totp_imap.extract_code(mail(body)), "")
+
+    def test_sentence_punctuation_does_not_hide_a_code(self):
+        for body in ("Your code is 123456.", "Code: 123456, thanks", "(123456)",
+                     "Use 123456; it expires"):
+            with self.subTest(body=body):
+                self.assertEqual(totp_imap.extract_code(mail(body)), "123456")
+
+    def test_standalone_number_beats_date_without_keyword(self):
+        self.assertEqual(totp_imap.extract_code(
+            mail("Sent 2026-11-25 call 555-0100 number 424242")), "424242")
+
+    def test_simple_mail_behaviour_is_unchanged(self):
+        self.assertEqual(totp_imap.extract_code(mail("111111 then 222222")), "111111")
+        self.assertEqual(totp_imap.extract_code(mail("Your login number: 8675")), "8675")
+
+    def test_code_length_filters_exact_digit_count(self):
+        body = mail("Ref 1234 and your code 987654")
+        self.assertEqual(totp_imap.extract_code(body, 6), "987654")
+        self.assertEqual(totp_imap.extract_code(body, 4), "1234")
+        self.assertEqual(totp_imap.extract_code(body, 8), "")
+        self.assertEqual(totp_imap.extract_code(body, None), "987654")
+
+    def test_fetch_code_passes_code_length_and_skips_non_matching_mail(self):
+        now = int(time.time())
+        client = FakeClient({b"1": (now, mail("code 654321")),
+                             b"2": (now, mail("Ref 1234 only"))})
+        self.assertEqual(totp_imap.fetch_code(client, {"code_length": 6}, now - 120), "654321")
+        self.assertEqual(totp_imap.fetch_code(client, {}, now - 120), "1234")
+
+    def test_code_length_validated_in_main(self):
+        for bad in (3, 9, "6", True, 6.0, 0, -1):
+            with self.subTest(code_length=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    marker = os.path.join(tmp, "marker")
+                    with open(marker, "w") as fh:
+                        fh.write("x")
+                    cfg = {"host": "imap.example.test", "user": "u@example.test",
+                           "password": SECRET, "code_length": bad}
+                    with patch.object(sys, "argv", ["totp_imap.py", marker]), \
+                         patch.object(sys, "stdin", io.StringIO(json.dumps(cfg))), \
+                         patch.object(totp_imap.imaplib, "IMAP4_SSL", FakeIMAP):
+                        FakeIMAP.instances = []
+                        with self.assertRaises(ValueError):
+                            totp_imap.main()
+                        self.assertEqual(FakeIMAP.instances, [])
+
+
 if __name__ == "__main__":
     unittest.main()
