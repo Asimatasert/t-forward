@@ -478,6 +478,19 @@ Update the CLI and run `t-forward build` together.
   as "no PIN set yet": if the file exists but cannot be read or parsed, the
   panel refuses every PIN-protected action (HTTP 503) and will not set a new
   PIN until you repair or restore the file; the daemon log says why.
+- The panel's browser session is a cookie **plus** a key held in the panel's own
+  origin storage and sent as a request header. Cookies are scoped by host, not
+  by port, so the browser also sends the daemon's cookies to every forwarded
+  HTTP service you open on the same hostname; a cookie alone therefore
+  authenticates nothing, and no cookie carries the daemon token. The key is
+  readable by script in the panel origin, and key plus cookie replayed outside
+  the browser is a valid session that does not expire until the token is
+  rotated. See [web/README.md](web/README.md).
+- **Upgrading from v0.8.0 or earlier:** those versions stored the daemon token
+  itself in a cookie, so it was sent to every forwarded HTTP service opened on
+  the same hostname. If you run the panel with a fixed token (`TF_WEB_TOKEN` or
+  `--token-file`), rotate it after upgrading, then open the panel once through
+  its `/?token=` link.
 - The local SOCKS5 proxy (`socks:`) has no authentication and is published on
   `127.0.0.1`: every user/process on that host can use it to reach the tunnel's
   network. Fine on a single-user workstation; on a shared host, don't enable it.

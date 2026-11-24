@@ -123,17 +123,25 @@ func TestAdminGateFailsClosedOnBrokenSettings(t *testing.T) {
 			// a session minted while the file was still fine
 			unlock := postJSON(e.a.handleAdminUnlock, "/admin/unlock", `{"pin":"`+failClosedPIN+`"}`, nil)
 			session := adminCookie(unlock)
-			if session == nil {
+			if session == nil || adminKey(unlock) == "" {
 				t.Fatalf("setup: unlock = %d %s", unlock.Code, unlock.Body.String())
 			}
+			// a session is the cookie plus its key; the cookie alone never passes
+			live := map[string]string{"X-Admin-Key": adminKey(unlock)}
 			tg := fakeTelegram(t, http.StatusOK, `{"ok":true}`)
-			untouched := tc.breakFile(t, settingsFile(e))
 
 			ran := false
 			inner := e.a.privileged(func(w http.ResponseWriter, r *http.Request) {
 				ran = true
 				writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 			})
+			// the session really is live while the file is intact, so its
+			// refusal below is due to the broken file and nothing else
+			if rec := postJSON(inner, "/conf/x", `{}`, live, session); rec.Code != http.StatusOK || !ran {
+				t.Fatalf("setup: live session refused on an intact file: %d %s", rec.Code, rec.Body.String())
+			}
+			ran = false
+			untouched := tc.breakFile(t, settingsFile(e))
 
 			// privileged route, with and without credentials
 			for what, hdr := range map[string]map[string]string{
@@ -144,8 +152,10 @@ func TestAdminGateFailsClosedOnBrokenSettings(t *testing.T) {
 				rec := postJSON(inner, "/conf/x", `{}`, hdr)
 				refused(t, what, rec)
 			}
-			rec := postJSON(inner, "/conf/x", `{}`, nil, session)
+			rec := postJSON(inner, "/conf/x", `{}`, live, session)
 			refused(t, "privileged POST with a live session", rec)
+			rec = postJSON(inner, "/conf/x", `{}`, nil, session)
+			refused(t, "privileged POST with the session cookie alone", rec)
 			if ran {
 				t.Error("the privileged handler ran")
 			}
@@ -153,7 +163,7 @@ func TestAdminGateFailsClosedOnBrokenSettings(t *testing.T) {
 			// the PIN cannot be set or replaced, other settings cannot be saved
 			rec = e.postSettings(`{"adminPin":"attacker-pin"}`, nil)
 			refused(t, "set PIN", rec)
-			rec = e.postSettings(`{"adminPin":"attacker-pin"}`, nil, session)
+			rec = e.postSettings(`{"adminPin":"attacker-pin"}`, live, session)
 			refused(t, "set PIN with a live session", rec)
 			rec = e.postSettings(`{"telegramChatId":"1"}`, nil)
 			refused(t, "save settings", rec)
