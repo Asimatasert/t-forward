@@ -101,6 +101,22 @@ jobs:
         # needs docker, python3 and openssl on the runner (all preinstalled)
         run: tests/tofu-restart.sh t-forward:test
 
+  tunnel-isolation:
+    name: Far side of a tunnel cannot reach the listeners (docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck the test
+        run: shellcheck --severity=warning tests/tunnel-isolation.sh
+      - name: Build the image under test
+        run: docker build -t t-forward:test .
+      - name: tests/tunnel-isolation.sh
+        # needs docker with /dev/net/tun and nftables in the runner's kernel
+        run: tests/tunnel-isolation.sh t-forward:test
+
   cli-blackbox:
     name: CLI black-box tests (fake docker)
     runs-on: ubuntu-latest

@@ -107,10 +107,64 @@ fi
 # stale leftovers from a previous run of this container (restart policy)
 rm -f "$AUTH/ready" "$AUTH/awaiting_code" "$AUTH/code" "$PIPE"
 
-# Listeners bind to eth0 (the Docker-published side) only, so nothing on
-# the far side of a tunnel can reach the forwards or the SOCKS proxy.
+# Listeners bind to the eth0 address (the Docker-published side). In vpn mode
+# install_tunnel_filter below also makes sure that nothing on the far side of
+# the tunnel can open a connection to that address, so the forwards and the
+# SOCKS proxy are reachable from the published side only.
 ETH_IP=$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)
 [ -n "$ETH_IP" ] || fail "could not determine eth0 address"
+
+# install_tunnel_filter [ipsec] - packet filter of a vpn container, loaded
+# before the tunnel process starts.
+#
+# The address bind alone keeps nobody out: Linux delivers a packet for a local
+# address whichever interface it arrives on, so a VPN gateway (or a peer behind
+# it) only has to send to the eth0 address through the tunnel to reach the
+# forwards and the unauthenticated SOCKS proxy. And the container's network
+# namespace has ip_forward=1, so the same gateway could also route packets
+# through the container to other hosts on the eth0 side.
+#
+# input:
+#   - Replies to connections this container opened itself (and ICMP errors
+#     related to them) are accepted first. That matters when the tunnel's own
+#     source address IS the eth0 address - an IPsec gateway that assigns no
+#     virtual IP, or any gateway that hands out that very address: the return
+#     traffic of every forward is then addressed to the eth0 address and must
+#     not be caught by the drops below.
+#   - Everything else addressed to the eth0 address is dropped unless it
+#     arrived on eth0 itself (openconnect: it arrives on tun0).
+#   - ipsec only: strongSwan has no tunnel interface, decrypted packets show
+#     up on eth0, so they are told apart by having passed IPsec decapsulation
+#     (`meta ipsec exists`). The rule is not loaded for openconnect, which
+#     therefore does not depend on kernel support for that match.
+# forward: policy drop. Nothing here relies on kernel forwarding - socat and
+#   microsocks relay through local sockets - so the container routes nothing.
+#
+# Needs nf_tables and connection tracking in the host kernel (ipsec: also the
+# nf_tables IPsec match). Fails closed: without the filter the container
+# refuses to run. ssh and local have no tunnel interface a far side could send
+# packets into (and run without NET_ADMIN), so they need - and get - no filter.
+install_tunnel_filter() {
+    local ipsec_rule=""
+    [ "${1:-}" = "ipsec" ] && ipsec_rule="meta ipsec exists ip daddr ${ETH_IP} drop"
+    nft -f - <<EOF || fail "cannot install the packet filter that keeps the far side of the tunnel away from the forwards / SOCKS proxy and the Docker-side network (nft failed; it needs NET_ADMIN and nftables + conntrack support in the host kernel${ipsec_rule:+, including the nftables IPsec match}). Refusing to start an unfiltered tunnel."
+table inet tforward
+delete table inet tforward
+table inet tforward {
+    chain input {
+        type filter hook input priority 0; policy accept;
+        ct state established ct direction reply accept
+        ct state related accept
+        iifname != { "eth0", "lo" } ip daddr ${ETH_IP} drop
+        ${ipsec_rule}
+    }
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+}
+EOF
+    log "tunnel filter installed: ${ETH_IP} accepts new connections arriving on eth0 only; nothing is forwarded"
+}
 
 start_socat_forwards() {
     local spec lport rhost rport
@@ -173,6 +227,7 @@ run_vpn() {
     [ -n "${VPN_USER:-}" ] || fail "VPN_USER is required"
     [ -s "$AUTH/password" ] || fail "/auth/password is missing"
 
+    install_tunnel_filter
     mkfifo "$PIPE"
 
     # Server identity. By default openconnect verifies the gateway certificate
@@ -300,6 +355,7 @@ run_ipsec() {
     [ -n "${VPN_USER:-}" ]   || fail "VPN_USER is required (XAuth user)"
     [ -s "$AUTH/password" ]  || fail "/auth/password is missing (XAuth password)"
     [ -s "$AUTH/psk" ]       || fail "/auth/psk is missing (IKE pre-shared key)"
+    install_tunnel_filter ipsec
 
     local ikev="${IKE_VERSION:-1}"
     local aggressive=no

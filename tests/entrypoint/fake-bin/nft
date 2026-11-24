@@ -1,0 +1,14 @@
+#!/bin/bash
+# fake nft: records argv and keeps the ruleset it is fed on stdin (`nft -f -`)
+# in $FAKE_STATE/nft.rules. FAKE_NFT_FAIL=1: fail like a kernel without
+# nftables / a container without NET_ADMIN.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=_common.sh
+. "$here/_common.sh"
+record nft "$@"
+cat >"$FS/nft.rules"
+if [ -n "${FAKE_NFT_FAIL:-}" ]; then
+    echo "Error: Could not process rule: Operation not permitted" >&2
+    exit 1
+fi
+exit 0

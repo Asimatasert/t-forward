@@ -7,7 +7,7 @@
 #
 # No Docker, no root, no network, no bats: bash + coreutils + grep/sed/awk.
 # The tunnel tools the entrypoint calls (openconnect, ipsec, ssh, sshpass, socat,
-# microsocks, oathtool, ip, ss, id, sleep) are replaced by the fakes in
+# microsocks, oathtool, nft, ip, ss, id, sleep) are replaced by the fakes in
 # tests/entrypoint/fake-bin, which sit first on a hermetic PATH, record every
 # call (argument boundaries intact) and play the part of the real tool just far
 # enough for the entrypoint to take each of its branches.
@@ -28,6 +28,7 @@
 #     (the fake output texts model the strings entrypoint.sh greps for; they were
 #     not captured from a real gateway)
 #   - tun0 / XFRM / route creation, eth0 detection on a real interface
+#   - what the nft ruleset does to real packets (tests/tunnel-isolation.sh)
 #   - uid 0 vs uid 10001 file-permission effects inside the container
 #   - PID-1 signal semantics (see tests/entrypoint "shutdown" scenarios: the
 #     entrypoint is observed as an ordinary process; the PID-1 effect is argued
@@ -571,6 +572,39 @@ calls_are socat 2
 argv microsocks 1 -i "$ETH" -p 1080
 out_has "forward: $ETH:2222 -> 10.0.0.20:22"; out_has "SOCKS5 proxy on $ETH:1080"
 
+begin "openconnect: the tunnel filter is installed before openconnect starts"
+cfg_oc; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true
+up_and_down 0
+rc 0; argv nft 1 -f -; calls_are nft 1
+check "nft ran before openconnect" test "$(call_file nft 1)" '<' "$(call_file openconnect 1)"
+R="$SB/state/nft.rules"
+file_has "$R" "        type filter hook input priority 0; policy accept;"
+file_has "$R" "        ct state established ct direction reply accept"
+file_has "$R" "        ct state related accept"
+file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
+file_has "$R" "        type filter hook forward priority 0; policy drop;"
+check "return traffic is accepted before anything is dropped" \
+    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+file_lacks "$R" "ipsec"   # openconnect must not depend on the kernel's IPsec match
+out_has "[t-forward] tunnel filter installed: $ETH accepts new connections arriving on eth0 only; nothing is forwarded"
+
+begin "openconnect: SOCKS only still gets the tunnel filter"
+cfg_oc; E SOCKS=true
+up_and_down 0
+rc 0; calls_are nft 1
+
+begin "openconnect: no listeners still gets the filter (nothing may be forwarded)"
+cfg_oc; E FORWARDS= SOCKS=false
+up_and_down 0
+rc 0; calls_are nft 1
+file_has "$SB/state/nft.rules" "        type filter hook forward priority 0; policy drop;"
+
+begin "openconnect: the filter cannot be installed -> refuses to start, nothing is exposed"
+cfg_oc; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true FAKE_NFT_FAIL=1; run_ep
+rc 1; out_has "ERROR: cannot install the packet filter that keeps the far side of the tunnel away from the forwards / SOCKS proxy"
+out_lacks "IPsec match"
+calls_are openconnect 0; calls_are socat 0; calls_are microsocks 0; absent "$SB/auth/ready"
+
 begin "openconnect: a TOTP secret file means no round-trip with the host"
 cfg_oc; E TOTP=true; authf totp_secret base32:JBSWY3DPEHPK3PXP
 up_and_down 0
@@ -725,6 +759,20 @@ begin "ipsec: forwards and SOCKS run on the published side after the SA is up"
 cfg_ipsec; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true
 up_and_down 0
 rc 0; argv_any socat -d -d "TCP-LISTEN:2222,bind=$ETH,fork,reuseaddr" TCP:10.0.0.20:22; argv microsocks 1 -i "$ETH" -p 1080
+argv nft 1 -f -; check "nft ran before charon" test "$(call_file nft 1)" '<' "$(call_file ipsec 1)"
+R="$SB/state/nft.rules"
+file_has "$R" "        ct state established ct direction reply accept"
+file_has "$R" "        ct state related accept"
+file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
+file_has "$R" "        meta ipsec exists ip daddr $ETH drop"
+file_has "$R" "        type filter hook forward priority 0; policy drop;"
+check "return traffic is accepted before anything is dropped" \
+    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+
+begin "ipsec: the filter cannot be installed -> refuses to start, nothing is exposed"
+cfg_ipsec; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true FAKE_NFT_FAIL=1; run_ep
+rc 1; out_has "ERROR: cannot install the packet filter"; out_has "including the nftables IPsec match"
+calls_are ipsec 0; calls_are socat 0; calls_are microsocks 0; absent "$SB/auth/ready"
 
 begin "ipsec: KEEP_AUTH=true keeps psk and password in /auth (secrets still written)"
 cfg_ipsec; E KEEP_AUTH=true
@@ -822,6 +870,7 @@ absent "$SB/home/.tforward/ssh_key"; absent "$SB/auth/ssh_key"; exists "$SB/auth
 out_has "forward: $ETH:2222 -> 10.0.0.40:22 (via ssh)"; out_has "forward: $ETH:5433 -> 10.0.0.40:5432 (via ssh)"
 out_has "SOCKS5 (ssh -D) on $ETH:1080"; out_has "connecting to username1@10.0.0.30:22"
 out_has "[t-forward] READY"; out_has "[t-forward] ssh exited with status 255"
+calls_are nft 0   # no tunnel interface, no NET_ADMIN: nothing to filter
 
 begin "ssh: password auth goes through sshpass -f, with no BatchMode and no -i"
 cfg_ssh; rm "$SB/auth/ssh_key"; authf password s3cret; E "FORWARDS=2222|10.0.0.40|22;" SSH_PORT=2200
@@ -906,7 +955,7 @@ start_ep
 check "tunnel comes up (ready marker)" await_ready
 argv_any socat -d -d "TCP-LISTEN:8080,bind=$ETH,fork,reuseaddr" TCP:10.0.0.5:80
 argv_any socat -d -d "TCP-LISTEN:9100,bind=$ETH,fork,reuseaddr" TCP:192.0.2.77:9100
-calls_are socat 2; calls_are microsocks 0
+calls_are socat 2; calls_are microsocks 0; calls_are nft 0
 check "the entrypoint keeps running" ep_alive
 kill -TERM "$EP_PID"; finish_ep
 out_has "forward: $ETH:8080 -> 10.0.0.5:80"; out_has "forward: $ETH:9100 -> 192.0.2.77:9100"; out_has "[t-forward] READY"
