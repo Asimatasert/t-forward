@@ -32,7 +32,14 @@ Hardening flags:
   already accepts loopback, the bind host, and IP-literal Hosts; anything else
   (a rogue hostname, i.e. a DNS-rebinding attempt) is rejected `403`. Browser
   requests marked `Sec-Fetch-Site: cross-site` are rejected too, so a website
-  the operator visits cannot drive the panel.
+  the operator visits cannot drive the panel. The one exception is a top-level
+  GET navigation (opening the panel link); a cross-site load into an
+  `<iframe>` / `<frame>` / `<embed>` / `<object>` is rejected `403`.
+- Every response carries `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'` and
+  `X-Content-Type-Options: nosniff`: the panel cannot be embedded in another
+  page (clickjacking), in either auth mode. Embedding it in a dashboard iframe
+  is therefore not supported.
 - `--no-auth` disables the token entirely. On a non-loopback bind it also needs
   `--expose` as an explicit acknowledgement that anyone who can reach the
   address gets full control.
