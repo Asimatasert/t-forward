@@ -131,7 +131,6 @@ func TestHostOnly(t *testing.T) {
 // brackets on, so the value is no longer an IP literal and hostAllowed rejects
 // it.
 func TestHostOnlyBareBracketedIPv6(t *testing.T) {
-	t.Skip("BUG: hostOnly(\"[::1]\") returns \"[::1]\" (brackets kept) so a port-less IPv6 Host header is rejected as a non-IP, non-loopback name")
 	if got := hostOnly("[::1]"); got != "::1" {
 		t.Errorf("hostOnly([::1]) = %q, want ::1", got)
 	}
@@ -708,8 +707,14 @@ func startDaemon(t *testing.T, o startOpts) *daemon {
 			t.Fatalf("daemon exited during startup (%v); output:\n%s", err, out.String())
 		default:
 		}
-		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
-			c.Close()
+		// Probe with a real HTTP request, not a bare TCP dial: dialling a loopback
+		// ephemeral port nobody listens on can "connect" to itself (TCP
+		// simultaneous open from the same source port), which made this wait
+		// return before the daemon was up and the first request fail with
+		// "connection reset by peer".
+		probe := &http.Client{Timeout: 500 * time.Millisecond}
+		if resp, err := probe.Get("http://" + addr + "/healthz"); err == nil {
+			resp.Body.Close()
 			break
 		}
 		if time.Now().After(deadline) {

@@ -13,11 +13,15 @@ set -u
 FS=${FAKE_STATE:?FAKE_STATE not set}
 mkdir -p "$FS/calls" "$FS/seq"
 
-# record CMD ARGS... -> calls/NNNN.CMD (the counter is a mkdir, so concurrent
-# fakes never share a number)
+# record CMD ARGS... -> calls/NNNN.CMD. Concurrent fakes (the backgrounded relays)
+# must never share a number, or one call file overwrites the other and a call is
+# lost. The number is claimed with the shell's own exclusive create (noclobber =
+# O_EXCL), not with an external `mkdir`: not every mkdir is an atomic
+# test-and-set (uutils mkdir checks for the directory first and reports success
+# when it lost the race to create it).
 record() {
     local n=1
-    while ! mkdir "$FS/seq/$n" 2>/dev/null; do n=$((n + 1)); done
+    while ! (set -o noclobber; : >"$FS/seq/$n") 2>/dev/null; do n=$((n + 1)); done
     printf -v CALLFILE '%s/calls/%04d.%s' "$FS" "$n" "$1"
     printf '%s\0' "$@" >"$CALLFILE"
 }
