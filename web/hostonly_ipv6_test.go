@@ -92,7 +92,7 @@ func TestTHostGuardBareBracketedIPv6(t *testing.T) {
 		{"bare unspecified IPv6 rejected", "127.0.0.1", nil, "[::]", 403},
 		{"bare bracketed name rejected", "127.0.0.1", nil, "[evil.example.com]", 403},
 		{"bare bracketed localhost-lookalike rejected", "127.0.0.1", nil, "[localhost]", 403},
-		{"bare bracketed IPv4 rejected", "127.0.0.1", nil, "[192.168.1.9]", 403},
+		{"bare bracketed IPv4 rejected", "127.0.0.1", nil, "[192.0.2.9]", 403},
 		{"unbalanced bracket rejected", "127.0.0.1", nil, "[::1", 403},
 		{"non-loopback IPv6 bind host does not admit the bare form", "[2001:db8::1]:8787", nil, "[2001:db8::1]", 403},
 		{"allow-list entry without brackets does not admit the bare form", "127.0.0.1", []string{"2001:db8::1"}, "[2001:db8::1]", 403},
