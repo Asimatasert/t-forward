@@ -166,12 +166,12 @@ func TestAGCheckPINRefusesWhileLockedWithoutEvaluating(t *testing.T) {
 	a, _ := newTestActions(t)
 	setPIN(t, a, "654321")
 	for i := 0; i < lockAfterFail; i++ {
-		if ok, retry := a.checkPIN("wrong-pin"); ok || retry != 0 {
+		if ok, retry, err := a.checkPIN("wrong-pin"); err != nil || ok || retry != 0 {
 			t.Fatalf("attempt %d = (%v, %v), want (false, 0)", i+1, ok, retry)
 		}
 	}
 	// locked now: even the right PIN is refused, with the wait reported
-	if ok, retry := a.checkPIN("654321"); ok || retry <= 0 {
+	if ok, retry, err := a.checkPIN("654321"); err != nil || ok || retry <= 0 {
 		t.Fatalf("locked checkPIN = (%v, %v), want (false, >0)", ok, retry)
 	}
 }
