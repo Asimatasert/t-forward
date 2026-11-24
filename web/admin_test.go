@@ -150,7 +150,7 @@ func TestSessionExpiresAndPINChangeRevokes(t *testing.T) {
 		t.Fatal("fresh session rejected")
 	}
 	// rotating the PIN (authorised by the session) revokes old sessions
-	rec := postJSON(a.handleSettings, "/settings", `{"adminPin":"second-pin"}`, map[string]string{"X-Admin-Key": key}, c)
+	rec := postJSON(a.handleSettings, "/settings", `{"adminPin":"second-pin","currentPin":"first-pin"}`, map[string]string{"X-Admin-Key": key}, c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rotate pin: %d %s", rec.Code, rec.Body.String())
 	}

@@ -2612,8 +2612,10 @@ async function renderSettings() {
     <div class="set-msg" id="set-nftest-msg-${k}"></div>`;
   el.innerHTML = `
     <div class="set-sec">Admin</div>
-    <div class="set-row"><label>${s.adminSet ? "Change PIN" : "Set a PIN"}</label>
-      <input type="password" id="set-adminpin" placeholder="${s.adminSet ? "leave blank to keep" : "protect settings & chatbot"}"></div>
+    ${s.adminSet ? `<div class="set-row"><label>Current PIN</label>
+      <input type="password" id="set-curpin" autocomplete="current-password" placeholder="only needed to change the PIN"></div>` : ""}
+    <div class="set-row"><label>${s.adminSet ? "New PIN" : "Set a PIN"}</label>
+      <input type="password" id="set-adminpin" autocomplete="new-password" placeholder="${s.adminSet ? "leave blank to keep" : "protect settings & chatbot"}"></div>
     <div class="set-hint">${s.adminSet
       ? "A PIN is set — config edits and (later) the chatbot require it."
       : "No PIN yet. Anyone on the tailnet can change these until you set one."}</div>
@@ -2678,7 +2680,11 @@ async function saveSettings(el, prev) {
   el.querySelectorAll(".set-topic").forEach((t) => { telegramTopics[t.dataset.topic] = t.value.trim(); });
   const body = { notify, telegramTopics, telegramChatId: el.querySelector("#set-tgchat").value.trim() };
   const pin = el.querySelector("#set-adminpin").value;
-  if (pin) body.adminPin = pin;
+  if (pin) {
+    body.adminPin = pin;
+    const cur = el.querySelector("#set-curpin");
+    if (cur) body.currentPin = cur.value;
+  }
   const tgtoken = el.querySelector("#set-tgtoken").value;
   if (tgtoken) body.telegramToken = tgtoken;
   const r = await fetch(withTok("/settings"), {
@@ -2688,6 +2694,10 @@ async function saveSettings(el, prev) {
   if (r.ok && j.ok) {
     if (pin) { setAdminKey(j.adminKey); adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); }
     toast("settings saved"); renderSettings();
+  } else if (r.status === 403 && !j.needPin) {
+    el.querySelector("#set-save-msg").textContent = "save failed: " + (j.error || "forbidden");
+  } else if (r.status === 429) {
+    el.querySelector("#set-save-msg").textContent = "too many attempts — wait a moment and try again";
   } else if (r.status === 403) {
     adminUnlocked = false; sessionStorage.removeItem("tf.adminUnlocked"); setAdminKey("");
     renderSettings();

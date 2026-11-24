@@ -249,6 +249,7 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		var in struct {
 			AdminPin       *string           `json:"adminPin"`
+			CurrentPin     *string           `json:"currentPin"`
 			TelegramToken  *string           `json:"telegramToken"`
 			TelegramChatID *string           `json:"telegramChatId"`
 			TelegramTopics map[string]string `json:"telegramTopics"`
@@ -272,6 +273,37 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 				"ok": false, "error": "admin PIN must be at least " + strconv.Itoa(minPINLen) + " characters",
 			})
 			return
+		}
+		// Replacing an existing PIN needs the current one, on top of the
+		// admin gate: a live session alone (or a PIN-less header path) must
+		// not be enough to take the PIN over. Setting the first PIN stays
+		// open. The check runs before a.mu is taken (a legacy-hash upgrade
+		// inside it takes that lock) and counts towards the lockout.
+		if newPin {
+			cur, err := a.readSettings()
+			if err != nil {
+				settingsUnavailable(w)
+				return
+			}
+			if cur.AdminSecretHash != "" {
+				given := ""
+				if in.CurrentPin != nil {
+					given = *in.CurrentPin
+				}
+				ok, retry, err := a.checkPIN(given)
+				if err != nil {
+					settingsUnavailable(w)
+					return
+				}
+				if retry > 0 {
+					lockedResponse(w, retry)
+					return
+				}
+				if !ok {
+					writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "current PIN required"})
+					return
+				}
+			}
 		}
 		// Serialize the whole load->mutate->save so two concurrent POSTs can't
 		// each read the old blob and lose one another's field updates.

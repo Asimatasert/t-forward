@@ -487,7 +487,11 @@ Update the CLI and run `t-forward build` together.
 - The admin PIN (settings / config writes) must be at least 6 characters. It is
   stored as a salted PBKDF2 hash, unlocking issues a random 8-hour session
   (never the PIN itself in the cookie), and repeated wrong PINs lock the unlock
-  endpoint out with an increasing delay. Hashes written by older versions are
+  endpoint out with an increasing delay. Replacing an existing PIN also needs
+  the current one (`currentPin` in the `POST /settings` body; the panel has a
+  "Current PIN" field), so a live session alone cannot take the PIN over; a
+  wrong current PIN counts towards the same lockout. Setting the first PIN is
+  unchanged. Hashes written by older versions are
   upgraded on the next successful unlock. Only a missing `settings.json` counts
   as "no PIN set yet": if the file exists but cannot be read or parsed, the
   panel refuses every PIN-protected action (HTTP 503) and will not set a new
