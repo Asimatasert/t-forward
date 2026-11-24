@@ -484,10 +484,10 @@ func TestSettingsPostRequiresPrivilegeOncePinSet(t *testing.T) {
 		assertRefused(t, e.postSettings(attempt, nil))
 	})
 	t.Run("random cookie", func(t *testing.T) {
-		assertRefused(t, e.postSettings(attempt, nil, &http.Cookie{Name: "tf_admin", Value: "forged"}))
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Key": e.a.gate.sessionKey("forged")}, &http.Cookie{Name: "tf_admin", Value: "forged"}))
 	})
 	t.Run("cookie that is the PIN itself is not a session", func(t *testing.T) {
-		assertRefused(t, e.postSettings(attempt, nil, &http.Cookie{Name: "tf_admin", Value: "correct-pin"}))
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Key": e.a.gate.sessionKey("correct-pin")}, &http.Cookie{Name: "tf_admin", Value: "correct-pin"}))
 	})
 	t.Run("wrong PIN in header", func(t *testing.T) {
 		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Token": "wrong-pin"}))

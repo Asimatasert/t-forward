@@ -127,9 +127,11 @@ func TestCookieCarriesSessionNotPIN(t *testing.T) {
 	if a.requirePrivileged(httptest.NewRecorder(), req) {
 		t.Fatal("cookie accepted without its origin-scoped key")
 	}
-	// ...but the PIN itself in the cookie (the old behaviour) does not
+	// ...but the PIN itself in the cookie (the old behaviour) does not, even
+	// with a key derived for that very value: the value must be a live session
 	req = httptest.NewRequest(http.MethodPost, "/conf/x", nil)
 	req.AddCookie(&http.Cookie{Name: "tf_admin", Value: "s3cret-pin"})
+	req.Header.Set("X-Admin-Key", a.gate.sessionKey("s3cret-pin"))
 	if a.requirePrivileged(httptest.NewRecorder(), req) {
 		t.Fatal("PIN accepted as cookie value")
 	}
@@ -214,6 +216,7 @@ func TestStaleCookieDoesNotTriggerLockout(t *testing.T) {
 	for i := 0; i < 3*lockAfterFail; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/conf/x", nil)
 		req.AddCookie(&http.Cookie{Name: "tf_admin", Value: "stale-session-from-before-restart"})
+		req.Header.Set("X-Admin-Key", a.gate.sessionKey("stale-session-from-before-restart"))
 		rec := httptest.NewRecorder()
 		if a.requirePrivileged(rec, req) {
 			t.Fatal("stale session accepted")
