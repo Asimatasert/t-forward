@@ -22,6 +22,7 @@ type totpIMAP struct {
 	Password   string `json:"password"`
 	Mailbox    string `json:"mailbox,omitempty"`
 	FromFilter string `json:"from_filter,omitempty"`
+	CodeLength int    `json:"code_length,omitempty"`
 	TLS        *bool  `json:"tls,omitempty"`
 }
 

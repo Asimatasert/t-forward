@@ -42,6 +42,7 @@ vpn:                          # when type: vpn
     password: string         # SECRET; protect the YAML with chmod 600
     mailbox: string          # default INBOX
     from_filter: string      # optional IMAP FROM substring match
+    code_length: int         # optional exact code length, 4-8 (default: any 4-8)
     tls: bool                # default true: implicit TLS; false: STARTTLS
   # --- protocol: ipsec (strongSwan) only ---
   psk: string                 # required: the IKE pre-shared key (shared secret, NOT the user password)
@@ -99,9 +100,16 @@ The helper polls every 3 seconds for up to 90 seconds (the daemon enforces a
 120-second total timeout). It searches unseen messages, optionally matching
 `from_filter`, and inspects the newest 50 matches first using IMAP UIDs. Arrival
 must be within 30 seconds before the current wait began and no more than 120
-seconds before polling began. It extracts the first standalone 4–8 digit run
-from decoded plain-text or HTML bodies, ignoring attachments and headers.
-Use a dedicated mailbox or sender filter to avoid unrelated numeric messages.
+seconds before polling began. It extracts a standalone 4–8 digit number from
+decoded plain-text or HTML bodies, ignoring attachments and headers. Numbers
+inside dates, phone numbers or amounts (`2026-11-25`, `555-0100`, `1234.56`,
+`+4412345`, `$5000`) are skipped; a number right after a word such as `code`,
+`OTP`, `PIN`, `token` or `verification` wins over earlier unrelated numbers,
+then a number followed by such a word, then the first remaining one. Set
+`code_length` (4–8) to accept only that exact digit count. `from_filter` is a
+server-side substring match on the From header, which a sender can forge: it
+narrows the mailbox, it does not authenticate the sender. Use a dedicated mailbox
+to avoid unrelated numeric messages.
 Messages remain unread. A missing code or failed login leaves manual/webhook
 entry available; a new wait starts a new attempt.
 
