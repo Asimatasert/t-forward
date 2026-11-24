@@ -64,9 +64,15 @@ func (a *Actions) handleConf(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// tagChars reports whether a tunnel tag avoids "," and "=". The CLI joins tags
+// into one container label and `docker ps` joins all labels with "," into
+// key=value pairs, so those characters would let a tag fake other labels.
+func tagChars(t string) bool { return !strings.ContainsAny(t, ",=") }
+
 // validateEdit is a light sanity pass. Injection is already impossible (values
 // go through strenv), so this only rejects shapes that would be nonsensical:
-// multi-line scalars, tags with whitespace, and non-CIDR / non-numeric keys.
+// multi-line scalars, tags with whitespace (tunnel tags also "," and "="), and
+// non-CIDR / non-numeric keys.
 func validateEdit(e confEdit) error {
 	oneLine := func(s string) bool { return !strings.ContainsAny(s, "\n\r") }
 	tagOK := func(t string) bool { return oneLine(t) && !strings.ContainsAny(t, " \t") }
@@ -75,7 +81,7 @@ func validateEdit(e confEdit) error {
 	}
 	if e.Tags != nil {
 		for _, t := range *e.Tags {
-			if !tagOK(t) {
+			if !tagOK(t) || !tagChars(t) {
 				return errStr("tag has an illegal character")
 			}
 		}

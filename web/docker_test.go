@@ -567,6 +567,10 @@ func psLine(name, state string) string {
 		"State":  state,
 		"Labels": "t-forward=1,t-forward.name=" + name + ",t-forward.type=ssh,t-forward.tags=prod eu",
 		"Ports":  "",
+		// exact label values, as the daemon's ps template prints them
+		"LabelName": name,
+		"LabelType": "ssh",
+		"LabelTags": "prod eu",
 	})
 	return string(b) + "\n"
 }

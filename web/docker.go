@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -204,6 +205,49 @@ type dockerPS struct {
 	State  string `json:"State"`
 	Labels string `json:"Labels"`
 	Ports  string `json:"Ports"`
+	// Exact label values, looked up by key with docker's .Label function (see
+	// psFormat). Labels above is one comma-joined string, so a value that
+	// contains "," or "=" can fake other entries when it is split again.
+	LabelName string `json:"LabelName"`
+	LabelType string `json:"LabelType"`
+	LabelTags string `json:"LabelTags"`
+}
+
+// psFormat is the `docker ps --format` template: docker's own JSON plus the
+// label values this daemon reads, each fetched by key.
+const psFormat = `{"Names":{{json .Names}},"State":{{json .State}},"Ports":{{json .Ports}},"Labels":{{json .Labels}},` +
+	`"LabelName":{{json (.Label "` + label + `.name")}},` +
+	`"LabelType":{{json (.Label "` + label + `.type")}},` +
+	`"LabelTags":{{json (.Label "` + label + `.tags")}}}`
+
+// psTunnelID returns the tunnel ID for a container: the name label when it is
+// a valid tunnel name, else the container name without its "tf-" prefix. A
+// label that is not a valid name (hand-made container, tampered value) is
+// ignored with a log line instead of being used as a conf file name.
+func psTunnelID(ps dockerPS) string {
+	id := ps.LabelName
+	if id != "" && !validName(id) {
+		log.Printf("docker: ignoring invalid %s.name label %q on %s", label, id, ps.Names)
+		id = ""
+	}
+	if id == "" {
+		id = strings.TrimPrefix(ps.Names, "tf-")
+	}
+	return id
+}
+
+// cleanTags splits a tags label and drops entries holding characters the
+// config editor no longer accepts (older configs may still carry them).
+func cleanTags(s string) []string {
+	out := []string{}
+	for _, t := range splitTags(s) {
+		if !tagChars(t) {
+			log.Printf("docker: dropping tag %q with a \",\" or \"=\"", t)
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 func parseLabels(s string) map[string]string {
@@ -252,7 +296,7 @@ func (d *Docker) State() []Tunnel {
 
 	out, err := exec.Command("docker", "ps", "-a",
 		"--filter", "label="+label,
-		"--format", "{{json .}}").Output()
+		"--format", psFormat).Output()
 	if err == nil {
 		sc := bufio.NewScanner(strings.NewReader(string(out)))
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -265,19 +309,15 @@ func (d *Docker) State() []Tunnel {
 			if json.Unmarshal([]byte(line), &ps) != nil {
 				continue
 			}
-			labels := parseLabels(ps.Labels)
-			id := labels[label+".name"]
-			if id == "" {
-				id = strings.TrimPrefix(ps.Names, "tf-")
-			}
+			id := psTunnelID(ps)
 			// start from conf data (desc/forwards/socks/…), then overlay live
 			t := d.tunnelFromConf(id)
 			t.ID = id
-			if typ := labels[label+".type"]; typ != "" {
-				t.Type = typ
+			if ps.LabelType != "" {
+				t.Type = ps.LabelType
 			}
-			if tags := labels[label+".tags"]; tags != "" {
-				t.Tags = splitTags(tags)
+			if ps.LabelTags != "" {
+				t.Tags = cleanTags(ps.LabelTags)
 			}
 			t.State = mapState(ps.State)
 			if t.State == "on" && d.isWaiting(id) {
@@ -538,7 +578,7 @@ func (d *Docker) sampleStats(ctx context.Context) {
 func (d *Docker) runningContainers(ctx context.Context) ([]string, map[string]string) {
 	out, err := exec.CommandContext(ctx, "docker", "ps",
 		"--filter", "label="+label,
-		"--format", "{{json .}}").Output()
+		"--format", psFormat).Output()
 	names := make(map[string]string)
 	if err != nil {
 		return nil, names
@@ -556,11 +596,7 @@ func (d *Docker) runningContainers(ctx context.Context) ([]string, map[string]st
 			continue
 		}
 		ids = append(ids, ps.Names)
-		id := parseLabels(ps.Labels)[label+".name"]
-		if id == "" {
-			id = strings.TrimPrefix(ps.Names, "tf-")
-		}
-		names[ps.Names] = id
+		names[ps.Names] = psTunnelID(ps)
 	}
 	return ids, names
 }
