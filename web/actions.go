@@ -49,7 +49,34 @@ type Actions struct {
 	// Tunnel mutations (up/down/code) run on it, NOT the HTTP request context, so
 	// a client disconnect mid-request doesn't SIGKILL the CLI partway through.
 	baseCtx context.Context
+
+	// runSlots bounds concurrent CLI runs started by handlers (see acquireRun).
+	runOnce  sync.Once
+	runSlots chan struct{}
 }
+
+// maxConcurrentRuns caps the t-forward CLI invocations the handlers run at the
+// same time. Each one is a process that talks to the docker daemon; unbounded,
+// a flood of requests exhausts file descriptors, goroutines or dockerd. 8 is
+// well above what an operator starting several tunnels at once needs.
+const maxConcurrentRuns = 8
+
+// acquireRun takes a CLI slot without waiting. When none is free it answers
+// 429 with Retry-After and returns false; otherwise the caller must call
+// releaseRun when the run is over.
+func (a *Actions) acquireRun(w http.ResponseWriter) bool {
+	a.runOnce.Do(func() { a.runSlots = make(chan struct{}, maxConcurrentRuns) })
+	select {
+	case a.runSlots <- struct{}{}:
+		return true
+	default:
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "too many operations in progress, retry shortly"})
+		return false
+	}
+}
+
+func (a *Actions) releaseRun() { <-a.runSlots }
 
 // opCtx returns the context that a state-changing CLI invocation should run on:
 // the daemon-lifetime context, so it survives the HTTP client going away.
@@ -138,7 +165,11 @@ func (a *Actions) handleUp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid name"})
 		return
 	}
+	if !a.acquireRun(w) {
+		return
+	}
 	err := a.runTF(a.opCtx(), name, "up", name, "--no-prompt")
+	a.releaseRun()
 	a.docker.broadcastState()
 	if err != nil && exitCode(err) != 3 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -231,7 +262,11 @@ func (a *Actions) handleDown(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid name"})
 		return
 	}
+	if !a.acquireRun(w) {
+		return
+	}
 	err := a.runTF(a.opCtx(), name, "down", name)
+	a.releaseRun()
 	a.docker.broadcastState()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -274,7 +309,11 @@ func (a *Actions) deliverCode(w http.ResponseWriter, r *http.Request, name, code
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid code"})
 		return
 	}
+	if !a.acquireRun(w) {
+		return
+	}
 	err := a.runTF(a.opCtx(), name, "code", name, code)
+	a.releaseRun()
 	a.docker.broadcastState()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})

@@ -27,7 +27,7 @@ import (
 //
 // Both halves are required on every request. Nothing is stored server-side: the
 // MAC keys derive from a random secret persisted beside the config (so an open
-// panel survives a daemon restart) mixed with the token (so rotating the token
+// panel survives a restart that keeps the same token) mixed with the token (so rotating the token
 // revokes every session). The secret is independent of the token, so a leaked
 // cookie gives no offline oracle for guessing a weak token.
 //
@@ -75,7 +75,10 @@ func loadSessionSecret(path string) []byte {
 	}
 	if s := read(); s != nil {
 		// An existing file is trusted as it is; at least stop others reading it.
-		if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		// Lstat, not Stat: chmod follows symlinks, and a link planted at this
+		// path must not get the mode of whatever it points at changed. A
+		// symlinked key is left as the operator arranged it.
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o077 != 0 {
 			if err := os.Chmod(path, 0o600); err != nil {
 				log.Printf("session secret %s is readable by other users and its mode cannot be tightened: %v", path, err)
 			}

@@ -2883,10 +2883,20 @@ function applyStat(s) {
 // panel stayed blank. This fetch guarantees the tunnels/ports show up, and a
 // poll below keeps them current whenever SSE goes quiet.
 let lastStateAt = 0, authWarned = false;
+// A signed-out tab (401/403) stops polling for AUTH_HOLD_MS, like the event
+// stream backs off; any answer other than 401/403 ends the hold.
+const AUTH_HOLD_MS = 30000;
+let authHoldUntil = 0;
+function authHold(r) {
+  if (r.status === 401 || r.status === 403) { authHoldUntil = Date.now() + AUTH_HOLD_MS; return true; }
+  authHoldUntil = 0;
+  return false;
+}
 async function pullState() {
+  if (Date.now() < authHoldUntil) return;
   try {
     const r = await fetch(withTok("/state"), { headers: authHeaders() });
-    if (r.status === 401 && !authWarned) { authWarned = true; toast("not signed in — open the panel through its /?token= link"); }
+    if (authHold(r) && !authWarned) { authWarned = true; toast("not signed in — open the panel through its /?token= link"); }
     if (!r.ok) return;
     applyState(await r.json());
     lastStateAt = Date.now();
@@ -2899,8 +2909,10 @@ async function pullState() {
 // their seq), so switching between paths never duplicates a console line.
 let evSeq = 0;
 async function pullEvlog() {
+  if (Date.now() < authHoldUntil) return;
   try {
     const r = await fetch(withTok("/evlog?since=" + evSeq), { headers: authHeaders() });
+    authHold(r);
     if (!r.ok) return;
     const d = await r.json();
     (d.events || []).forEach((e) => {

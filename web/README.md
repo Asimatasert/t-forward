@@ -27,7 +27,9 @@ forwarded service you open on the same hostname. So the `tf_session` cookie
 with a per-session key that the panel keeps in its own origin's storage and
 sends in the `X-Session-Key` header; the admin session works the same way
 (`tf_admin` cookie + `X-Admin-Key`, both issued by `POST /admin/unlock`). A
-cookie replayed by another port authenticates nothing. Consequences:
+cookie replayed by another port cannot call the API or start a session; the
+only thing it gets is the static panel page from `GET /` (no key, no data).
+Consequences:
 
 - Open a new browser profile (or a browser whose site data was cleared) through
   the `/?token=` link again; a bare `/` only works where the session exists.
@@ -41,9 +43,11 @@ cookie replayed by another port authenticates nothing. Consequences:
 - API clients are unaffected: send the token in `Authorization: Bearer` /
   `X-Token`, and the admin PIN in `X-Admin-Token`. The `tf_admin` cookie value
   is no longer accepted as `X-Admin-Token`.
-- Sessions survive a daemon restart through a random secret stored in
-  `<config-dir>/web-session.key` (mode `600`); changing the token, or deleting
-  that file and restarting, signs every browser out. Nothing else does: a
+- Sessions survive a daemon restart only with a fixed token (`TF_WEB_TOKEN` or
+  `--token-file`): they are bound to the token and to a random secret stored in
+  `<config-dir>/web-session.key` (mode `600`). A token generated at startup is
+  new on every start, so each restart signs every browser out. Changing the
+  token, or deleting that file and restarting, signs every browser out too. Nothing else does: a
   browser session has no expiry of its own.
 - What the split does not cover: the key has to be readable by the panel's
   script, so script injected into the panel origin could read it. A key
