@@ -901,15 +901,15 @@ rc 1; out_has "ERROR: ssh did not come up within 3s"; absent "$SB/auth/ready"
 # ===================================================================== local
 
 begin "local: one socat per forward on the published address, SOCKS off"
-cfg_local; E "FORWARDS=8080|10.0.0.5|80;;9100|192.168.1.77|9100;"
+cfg_local; E "FORWARDS=8080|10.0.0.5|80;;9100|192.0.2.77|9100;"
 start_ep
 check "tunnel comes up (ready marker)" await_ready
 argv_any socat -d -d "TCP-LISTEN:8080,bind=$ETH,fork,reuseaddr" TCP:10.0.0.5:80
-argv_any socat -d -d "TCP-LISTEN:9100,bind=$ETH,fork,reuseaddr" TCP:192.168.1.77:9100
+argv_any socat -d -d "TCP-LISTEN:9100,bind=$ETH,fork,reuseaddr" TCP:192.0.2.77:9100
 calls_are socat 2; calls_are microsocks 0
 check "the entrypoint keeps running" ep_alive
 kill -TERM "$EP_PID"; finish_ep
-out_has "forward: $ETH:8080 -> 10.0.0.5:80"; out_has "forward: $ETH:9100 -> 192.168.1.77:9100"; out_has "[t-forward] READY"
+out_has "forward: $ETH:8080 -> 10.0.0.5:80"; out_has "forward: $ETH:9100 -> 192.0.2.77:9100"; out_has "[t-forward] READY"
 
 begin "local: SOCKS only"
 E TUNNEL_TYPE=local SOCKS=true

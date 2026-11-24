@@ -37,7 +37,7 @@ func TestValidateEditOK(t *testing.T) {
 			Tags:     strsp("a"),
 			Hosts:    map[string]hostEdit{"1.2.3.4": {Note: strp("h")}},
 			Forwards: map[string]string{"1.2.3.4:80": "x"},
-			Subnets:  map[string]hostEdit{"192.168.0.0/24": {Tags: strsp("lan")}},
+			Subnets:  map[string]hostEdit{"203.0.113.0/24": {Tags: strsp("lan")}},
 		}},
 	}
 	for _, c := range cases {
@@ -196,7 +196,7 @@ func TestValidPort(t *testing.T) {
 }
 
 func TestValidCIDRKey(t *testing.T) {
-	good := []string{"10.0.0.0/16", "192.168.1.0/24", "0.0.0.0/0", "10.8.0.5/32", "172.16.0.0/12"}
+	good := []string{"10.0.0.0/16", "192.0.2.0/24", "0.0.0.0/0", "10.8.0.5/32", "172.16.0.0/12"}
 	for _, s := range good {
 		if !validCIDRKey(s) {
 			t.Errorf("validCIDRKey(%q) = false, want true", s)
@@ -638,8 +638,8 @@ func TestApplyEditsAllFields(t *testing.T) {
 			"10.0.0.20:9999": "no such port", // unknown port: no-op
 		},
 		Subnets: map[string]hostEdit{
-			"10.0.0.0/16":    {Note: strp("HQ")},                       // update label, keep tags
-			"192.168.5.0/24": {Note: strp("lab"), Tags: strsp("test")}, // create
+			"10.0.0.0/16":     {Note: strp("HQ")},                       // update label, keep tags
+			"198.51.100.0/24": {Note: strp("lab"), Tags: strsp("test")}, // create
 		},
 	})
 	if err != nil {
@@ -648,18 +648,18 @@ func TestApplyEditsAllFields(t *testing.T) {
 	for expr, want := range map[string]string{
 		".name": `"Prod VPN"`,
 		".tags": `["prod","eu-1"]`,
-		`.hosts[] | select(.ip == "10.0.0.20") | .name`:                    `"db primary"`,
-		`.hosts[] | select(.ip == "10.0.0.20") | .tags`:                    `["db"]`,
-		`.hosts[] | select(.ip == "10.0.0.21") | .tags`:                    `[]`,
-		`.hosts[] | select(.ip == "10.0.0.21") | .name`:                    `"bastion"`,
-		`.hosts[0].forwards[] | select(.remote == 22) | .note`:             `"ops access"`,
-		`.hosts[0].forwards[] | select(.remote == 22) | .service`:          `"ssh"`,
-		`.hosts[0].forwards[] | select(.remote == 80) | .note`:             `"web ui"`,
-		`.hosts[0].forwards[] | select(.remote == 5432) | has("note")`:     `false`,
-		`.hosts[1].forwards[0].note`:                                       `"jump"`,
-		`.subnets[] | select(.cidr == "10.0.0.0/16") | .label`:             `"HQ"`,
-		`.subnets[] | select(.cidr == "10.0.0.0/16") | .tags`:              `["dmz"]`,
-		`.subnets[] | select(.cidr == "192.168.5.0/24") | [.label, .tags]`: `["lab",["test"]]`,
+		`.hosts[] | select(.ip == "10.0.0.20") | .name`:                     `"db primary"`,
+		`.hosts[] | select(.ip == "10.0.0.20") | .tags`:                     `["db"]`,
+		`.hosts[] | select(.ip == "10.0.0.21") | .tags`:                     `[]`,
+		`.hosts[] | select(.ip == "10.0.0.21") | .name`:                     `"bastion"`,
+		`.hosts[0].forwards[] | select(.remote == 22) | .note`:              `"ops access"`,
+		`.hosts[0].forwards[] | select(.remote == 22) | .service`:           `"ssh"`,
+		`.hosts[0].forwards[] | select(.remote == 80) | .note`:              `"web ui"`,
+		`.hosts[0].forwards[] | select(.remote == 5432) | has("note")`:      `false`,
+		`.hosts[1].forwards[0].note`:                                        `"jump"`,
+		`.subnets[] | select(.cidr == "10.0.0.0/16") | .label`:              `"HQ"`,
+		`.subnets[] | select(.cidr == "10.0.0.0/16") | .tags`:               `["dmz"]`,
+		`.subnets[] | select(.cidr == "198.51.100.0/24") | [.label, .tags]`: `["lab",["test"]]`,
 		`.subnets | length`: `2`,
 		`.hosts | length`:   `2`,
 	} {

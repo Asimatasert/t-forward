@@ -142,7 +142,7 @@ func TestHostOnlyBareBracketedIPv6(t *testing.T) {
 
 func TestIsLoopbackHost(t *testing.T) {
 	yes := []string{"", "localhost", "LOCALHOST", "127.0.0.1", "127.9.9.9", "::1"}
-	no := []string{"0.0.0.0", "::", "192.168.1.5", "10.0.0.1", "example.com", "127.0.0.1.evil.com", "[::1]"}
+	no := []string{"0.0.0.0", "::", "192.0.2.5", "10.0.0.1", "example.com", "127.0.0.1.evil.com", "[::1]"}
 	for _, h := range yes {
 		if !isLoopbackHost(h) {
 			t.Errorf("isLoopbackHost(%q) = false, want true", h)
@@ -159,7 +159,7 @@ func TestIsLoopbackHost(t *testing.T) {
 // address with an empty host (":8787") binds every interface, so it (like
 // 0.0.0.0 and [::]) must not count as loopback.
 func TestNoAuthGuardTreatsWildcardBindAsNonLoopback(t *testing.T) {
-	for _, addr := range []string{":8787", "0.0.0.0:8787", "[::]:8787", "192.168.1.5:8787", "example.com:8787", "127.0.0.1.evil.com:8787"} {
+	for _, addr := range []string{":8787", "0.0.0.0:8787", "[::]:8787", "192.0.2.5:8787", "example.com:8787", "127.0.0.1.evil.com:8787"} {
 		if bindIsLoopback(addr) {
 			t.Errorf("bindIsLoopback(%q) = true, want false", addr)
 		}
@@ -192,9 +192,9 @@ func TestHostAllowed(t *testing.T) {
 		{"localhost", true},
 		{"127.0.0.1", true},
 		{"::1", true},
-		{"panel.lan", true},   // explicitly allowed
-		{"192.168.4.7", true}, // any IP literal: cannot be DNS-rebound
-		{"100.64.0.9", true},  // tailnet
+		{"panel.lan", true},    // explicitly allowed
+		{"198.51.100.7", true}, // any IP literal: cannot be DNS-rebound
+		{"100.64.0.9", true},   // tailnet
 		{"evil.example.com", false},
 		{"panel.lan.evil.com", false},
 		{"rebind.attacker.net", false},
@@ -454,7 +454,7 @@ func TestGuardMiddleware(t *testing.T) {
 		{"ipv6 loopback with port", "127.0.0.1", nil, "GET", "[::1]:8787", nil, 418},
 		{"missing host", "127.0.0.1", nil, "GET", "-", nil, 418},
 		{"rebinding name", "127.0.0.1", nil, "GET", "evil.example.com:8787", nil, 403},
-		{"ip literal accepted", "127.0.0.1", nil, "GET", "192.168.1.9:8787", nil, 418},
+		{"ip literal accepted", "127.0.0.1", nil, "GET", "192.0.2.9:8787", nil, 418},
 		{"bind host accepted", "panel.lan", nil, "GET", "panel.lan:8787", nil, 418},
 		{"bind host case-insensitive", "Panel.LAN", nil, "GET", "PANEL.lan", nil, 418},
 		{"wildcard bind host adds nothing", "0.0.0.0", nil, "GET", "evil.example.com", nil, 403},
@@ -1084,7 +1084,7 @@ func TestMainAuthAndGuardOverHTTP(t *testing.T) {
 		for host, want := range map[string]int{
 			"localhost":                         200,
 			"127.0.0.1:" + listenPortOf(d.addr): 200,
-			"192.168.77.7":                      200, // IP literal
+			"203.0.113.7":                       200, // IP literal
 			"panel.example.org":                 200, // -allowed-hosts, case-folded and trimmed
 			"other.example.org:8787":            200,
 			"third.example.org":                 403,

@@ -140,7 +140,7 @@ hosts:
 name: LAN printer
 type: local
 hosts:
-  - { ip: 192.168.1.77, forwards: [ { remote: 9100, local: 9100 } ] }
+  - { ip: 192.0.2.77, forwards: [ { remote: 9100, local: 9100 } ] }
 ```
 
 **Fields.** `remote` is the server's port; `local` is your localhost port — a
@@ -170,7 +170,7 @@ t-forward up --server vpn.example.com --user username1 --protocol gp \
   --forward 2222:10.0.0.5:22 --socks any
 t-forward up --ssh-host bastion.example.com --ssh-user username1 \
   --ssh-key ~/.ssh/id_ed25519 --forward 5433:10.0.0.20:5432
-t-forward up --type local --name printer --forward 9100:192.168.1.77:9100
+t-forward up --type local --name printer --forward 9100:192.0.2.77:9100
 ```
 
 **Shell completion.** Completes verbs and tunnel names (`up`/`down`/`code`/`logs`/`events`):

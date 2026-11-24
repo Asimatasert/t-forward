@@ -125,8 +125,8 @@ func TestDeviceIDIsAcceptedByValidDeviceID(t *testing.T) {
 		deviceID("AA:BB:CC:DD:EE:FF", "192.0.2.1"),
 		// macOS `arp -n` drops leading zeros of each byte; arpMAC passes
 		// that through unchanged, so these are real ids on macOS hosts.
-		deviceID("0:1b:63:84:45:e6", "192.168.1.5"),
-		deviceID("0:0:0:0:0:1", "192.168.1.6"),
+		deviceID("0:1b:63:84:45:e6", "192.0.2.5"),
+		deviceID("0:0:0:0:0:1", "192.0.2.6"),
 		deviceID("", "192.0.2.1"),
 	} {
 		if !validDeviceID(id) {
@@ -139,7 +139,7 @@ func TestWidenHostCIDR(t *testing.T) {
 	cases := []struct{ name, ip, cidr, want string }{
 		{"/32 becomes the /24 around the ip", "10.8.0.5", "10.8.0.5/32", "10.8.0.0/24"},
 		{"/32 uses the interface ip", "100.64.12.77", "100.64.12.77/32", "100.64.12.0/24"},
-		{"/24 passes through", "192.168.1.20", "192.168.1.0/24", "192.168.1.0/24"},
+		{"/24 passes through", "192.0.2.20", "192.0.2.0/24", "192.0.2.0/24"},
 		{"/16 passes through", "10.1.2.3", "10.1.0.0/16", "10.1.0.0/16"},
 		{"/31 passes through", "10.1.2.3", "10.1.2.2/31", "10.1.2.2/31"},
 		{"empty cidr stays empty", "10.1.2.3", "", ""},

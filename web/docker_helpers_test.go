@@ -76,14 +76,14 @@ func mustNets(t *testing.T, cidrs ...string) []*net.IPNet {
 
 func TestSubnetOf(t *testing.T) {
 	// deliberately not sorted by specificity: the most specific must still win
-	nets := mustNets(t, "10.1.0.0/16", "10.0.0.0/8", "10.1.2.0/24", "192.168.0.0/16", "fd00::/8")
+	nets := mustNets(t, "10.1.0.0/16", "10.0.0.0/8", "10.1.2.0/24", "172.16.0.0/16", "fd00::/8")
 	cases := []struct {
 		name, ip, want string
 	}{
 		{"most specific /24", "10.1.2.3", "10.1.2.0/24"},
 		{"middle /16", "10.1.9.9", "10.1.0.0/16"},
 		{"outer /8", "10.200.0.1", "10.0.0.0/8"},
-		{"other net", "192.168.7.7", "192.168.0.0/16"},
+		{"other net", "172.16.7.7", "172.16.0.0/16"},
 		{"network address", "10.1.2.0", "10.1.2.0/24"},
 		{"broadcast address", "10.1.2.255", "10.1.2.0/24"},
 		{"IPv4-mapped IPv6", "::ffff:10.1.2.3", "10.1.2.0/24"},
