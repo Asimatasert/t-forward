@@ -65,7 +65,9 @@ jobs:
     name: GitHub release + binaries
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create / update the GitHub release (this job only)
+      contents: write       # create the GitHub release (this job only)
+      id-token: write       # sign the build provenance (this job only)
+      attestations: write   # store the build provenance (this job only)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,15 +86,43 @@ jobs:
           GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o ../dist/t-forward-web-linux-arm64 .
       - name: Stage CLI script
         run: cp t-forward dist/t-forward
+      - name: Checksums
+        # one SHA256SUMS file covering every uploaded binary; names are relative
+        # so users can run `sha256sum -c SHA256SUMS` next to the downloads
+        run: |
+          cd dist
+          sha256sum t-forward t-forward-web-linux-amd64 t-forward-web-linux-arm64 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Attest build provenance
+        # signed provenance for the binaries; verify with `gh attestation verify`
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/t-forward
+            dist/t-forward-web-linux-amd64
+            dist/t-forward-web-linux-arm64
       - name: Publish release
         # the preinstalled gh CLI with the job's own GITHUB_TOKEN instead of a
-        # third-party action holding a write token
+        # third-party action holding a write token.
+        # Published assets are never replaced (no --clobber). A re-run of the
+        # same tag is a no-op when the rebuilt SHA256SUMS is identical to the
+        # published one, and fails when it differs or the release has none.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=(dist/t-forward-web-linux-amd64 dist/t-forward-web-linux-arm64 dist/t-forward)
+          files=(dist/t-forward-web-linux-amd64 dist/t-forward-web-linux-arm64 dist/t-forward dist/SHA256SUMS)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            mkdir published
+            if ! gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir published; then
+              echo "::error::Release $GITHUB_REF_NAME exists without SHA256SUMS; refusing to modify its assets"
+              exit 1
+            fi
+            if cmp -s published/SHA256SUMS dist/SHA256SUMS; then
+              echo "Release $GITHUB_REF_NAME already published with identical checksums; nothing to upload"
+            else
+              echo "::error::Rebuilt binaries differ from the published release $GITHUB_REF_NAME; refusing to replace assets"
+              exit 1
+            fi
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
           fi
