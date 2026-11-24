@@ -39,6 +39,13 @@ type evEntry struct {
 // same as a lossy SSE drop).
 const evCap = 250
 
+// maxEventStreams caps concurrent /events streams. Every stream holds a
+// connection, a goroutine and two channels for as long as the tab lives; a
+// buggy or hostile authenticated client could otherwise open them without
+// limit. 64 is far beyond what one operator with many tabs and a few devices
+// ever opens; past it the daemon answers 503 with Retry-After.
+const maxEventStreams = 64
+
 // client holds the two delivery paths for one connected browser.
 //
 //   - lossy carries stat/event frames; a full buffer drops the frame.
@@ -119,14 +126,19 @@ func (h *Hub) Broadcast(eventType string, payload any) {
 	h.mu.Unlock()
 }
 
+// register adds a client, or returns nil when maxEventStreams are already
+// connected.
 func (h *Hub) register() *client {
 	c := &client{
 		lossy: make(chan []byte, 64),
 		state: make(chan []byte, 1),
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.clients) >= maxEventStreams {
+		return nil
+	}
 	h.clients[c] = struct{}{}
-	h.mu.Unlock()
 	return c
 }
 
@@ -162,15 +174,21 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	// Register before any header is sent so a refused client gets a plain 503.
+	c := h.register()
+	if c == nil {
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "too many event streams", http.StatusServiceUnavailable)
+		return
+	}
+	defer h.unregister(c)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	c := h.register()
-	defer h.unregister(c)
 
 	// initial full-state snapshot
 	if h.SnapshotFn != nil {

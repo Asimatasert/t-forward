@@ -711,7 +711,12 @@ func (a *Actions) handleScanForward(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "write conf: " + err.Error()})
 		return
 	}
+	if !a.acquireRun(w) {
+		os.Remove(confFile) // refused: leave no orphan conf behind
+		return
+	}
 	err := a.runTF(a.opCtx(), name, "up", name, "--no-prompt")
+	a.releaseRun()
 	a.docker.broadcastState()
 	if err != nil {
 		// Roll back the conf we just wrote so a failed "up" doesn't orphan it.
