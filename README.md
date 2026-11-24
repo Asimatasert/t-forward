@@ -94,6 +94,23 @@ The container image is pulled automatically from
 amd64 + arm64) on first `up`. To build it locally instead, run
 `./t-forward build` — or set `T_FORWARD_HUB_IMAGE=""` to always build.
 
+### Image updates
+
+A locally built image is labelled with a hash of its build inputs (`Dockerfile`
+and `entrypoint.sh`). On `up`, the CLI compares it with the files next to the
+script; after you update the repo and the hash differs, it prints one line
+(`Image ... is out of date ... rebuilding`) and rebuilds before starting. When
+nothing changed there is no rebuild and no extra delay. Notes:
+
+- Tunnels that are already running keep using the old image until you restart
+  them (`t-forward down NAME`, then `up`).
+- An image without the label that was built locally before this check existed
+  is treated as stale and rebuilt once. An image pulled from the registry is
+  never rebuilt automatically (re-pull it, or run `t-forward build`).
+- If the rebuild fails (for example offline), the CLI warns and starts with the
+  existing image; `t-forward build` forces a rebuild at any time.
+- Nothing is pulled or pushed by this check; the build is local only.
+
 ## Configure
 
 One YAML file per tunnel in `~/.config/t-forward/conf.d/` — the file name is the
@@ -373,8 +390,10 @@ loaded the container refuses to start (see [Requirements](#requirements)). A hos
 whose kernel cannot load the filter therefore cannot run `vpn` tunnels at all,
 and there is deliberately no option to run without it; `ssh` and `local` tunnels
 are not affected. The
-filter ships in the image: after updating, re-pull it or run `t-forward build` -
-an older local image keeps running without it. The
+filter ships in the image. A locally built image from before the filter existed
+is rebuilt automatically on the next `up` (see
+[Image updates](#image-updates)); tunnels that are already running keep the old
+image until you restart them. The
 host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)
 to share forwards on a trusted network.
 
@@ -451,7 +470,8 @@ The CLI version is unchanged, so old and new CLI/image can be mixed:
   On Linux this can stop with "/auth is missing or not writable" until the CLI
   is updated.
 
-Update the CLI and run `t-forward build` together.
+Update the CLI; a locally built image is then rebuilt automatically on the next `up`
+(`t-forward build` does it explicitly; a pulled image needs a re-pull).
 
 ## Security notes
 

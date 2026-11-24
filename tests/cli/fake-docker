@@ -17,6 +17,11 @@
 #   FAKE_DOCKER_SECOPTS=...       what `docker info --format {{.SecurityOptions}}` prints
 #   FAKE_DOCKER_NO_IMAGE=1        image missing until a `tag` / `build` happens
 #   FAKE_DOCKER_IMG_USER=...      Config.User of the image (default: tforward; may be empty)
+#   FAKE_DOCKER_IMG_HASH=...      t-forward.src-hash label of the image (default: none)
+#   FAKE_DOCKER_IMG_DIGESTS=...   repo digests of the image (default: the published
+#                                 repo = a pulled image; a `docker build` makes the
+#                                 image local: label from --label, digest of the
+#                                 local name only)
 #   FAKE_DOCKER_PULL_FAIL=1       `docker pull` fails
 #   FAKE_DOCKER_BUILD_FAIL=1      `docker build` fails
 #   FAKE_DOCKER_RUN_FAIL=1        `docker run` fails
@@ -63,6 +68,10 @@ case "$cmd" in
             exit 1
         fi
         case "$*" in
+            *Labels*)
+                if [ -e "$D/image-hash" ]; then lbl=$(cat "$D/image-hash"); dg="t-forward@sha256:0123"
+                else lbl=${FAKE_DOCKER_IMG_HASH-}; dg=${FAKE_DOCKER_IMG_DIGESTS-asimatasert/t-forward@sha256:0123}; fi
+                echo "$lbl|$dg" ;;
             *Config.User*) echo "${FAKE_DOCKER_IMG_USER-tforward}" ;;
         esac
         ;;
@@ -74,6 +83,8 @@ case "$cmd" in
         ;;
     build)
         [ -z "${FAKE_DOCKER_BUILD_FAIL:-}" ] || { echo "build failed" >&2; exit 1; }
+        : >"$D/image-hash"
+        for a in "$@"; do case "$a" in t-forward.src-hash=*) printf '%s' "${a#t-forward.src-hash=}" >"$D/image-hash" ;; esac; done
         : >"$D/image-present"
         ;;
     network)

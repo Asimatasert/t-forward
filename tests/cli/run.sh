@@ -38,10 +38,12 @@ trap 'rm -rf "$TMP"' EXIT
 # ---- hermetic toolbox: the CLI sees only these tools (+ fake docker, real yq)
 CORE=$TMP/core; mkdir -p "$CORE"
 for t in bash env sed tr grep cat head tail cut basename dirname readlink mktemp rm mkdir chmod \
-         stat cp mv find sleep wc ls touch id sort awk; do
+         stat cp mv find sleep wc ls touch id sort awk cksum; do
     p=$(command -v "$t" 2>/dev/null)
     case "$p" in /*) ln -s "$p" "$CORE/$t" ;; *) die_harness "required tool missing: $t" ;; esac
 done
+# optional: the CLI prefers sha256sum, then shasum, then cksum for the image hash
+for t in sha256sum shasum; do p=$(command -v "$t" 2>/dev/null); case "$p" in /*) ln -s "$p" "$CORE/$t" ;; esac; done
 YQDIR=$TMP/yqdir; mkdir -p "$YQDIR"; ln -s "$YQ_BIN" "$YQDIR/yq"
 REAL_ID=$(command -v id)
 
@@ -731,11 +733,13 @@ has_call logs --tail 40 tf-rel
 tf events;     rc 0; has_call ps -q --filter label=t-forward; out_match '^log    plain line$'
 tf events -f rel; rc 0; has_call logs -f --tail 40 tf-rel
 
+HASHCMD=sha256sum; command -v sha256sum >/dev/null 2>&1 || HASHCMD="shasum -a 256"
+WANT=$(cat "$ROOT/Dockerfile" "$ROOT/entrypoint.sh" | $HASHCMD | cut -d" " -f1)
 begin "build: docker build of the repo dir, tag from T_FORWARD_IMAGE; failure reported"
 tf build; rc 0; out_has "built t-forward:latest"
-has_call build -t t-forward:latest "$ROOT"
+has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
 TF_ENV=(T_FORWARD_IMAGE=my/image:dev)
-tf build; rc 0; has_call build -t my/image:dev "$ROOT"
+tf build; rc 0; has_call build --label "t-forward.src-hash=$WANT" -t my/image:dev "$ROOT"
 TF_ENV=(FAKE_DOCKER_BUILD_FAIL=1)
 tf build; rc 1; err_has "ERROR: image build failed"
 
@@ -752,10 +756,47 @@ has_call pull asimatasert/t-forward:"$VERSION"; has_call tag asimatasert/t-forwa
 no_call build -t t-forward:latest "$ROOT"
 begin "image bootstrap: pull failure falls back to build; empty HUB image builds directly"
 TF_ENV=(FAKE_DOCKER_NO_IMAGE=1 FAKE_DOCKER_PULL_FAIL=1)
-tf "${ADHOC_LOCAL[@]}"; rc 0; out_has "pull failed; building locally..."; has_call build -t t-forward:latest "$ROOT"
+tf "${ADHOC_LOCAL[@]}"; rc 0; out_has "pull failed; building locally..."; has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
 begin "image bootstrap: T_FORWARD_HUB_IMAGE empty never pulls"
 TF_ENV=(FAKE_DOCKER_NO_IMAGE=1 T_FORWARD_HUB_IMAGE=)
 tf "${ADHOC_LOCAL[@]}"; rc 0; out_has "Image t-forward:latest not found; building it..."; no_call pull
+
+begin "image refresh: stale label -> one-line message, rebuild, then no rebuild"
+TF_ENV=(FAKE_DOCKER_IMG_HASH=0000stale)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "Image t-forward:latest is out of date"; out_has "Running tunnels keep the old image until restarted"
+has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
+no_call pull
+begin "image refresh: the rebuilt image carries the new hash, so the next start does not rebuild"
+TF_ENV=(FAKE_DOCKER_IMG_HASH=0000stale)
+tf "${ADHOC_LOCAL[@]}"; rc 0; has_call build
+rm -f "$SB"/fake/calls/*; : >"$SB/fake/containers/.keep"; rm -f "$SB"/fake/containers/tf-*
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_lacks "out of date"; no_call build
+begin "image refresh: matching label -> no rebuild"
+TF_ENV=(FAKE_DOCKER_IMG_HASH="$WANT")
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_lacks "out of date"; no_call build
+begin "image refresh: unlabeled local build (before the label existed) is rebuilt"
+TF_ENV=(FAKE_DOCKER_IMG_DIGESTS=)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "out of date"; has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
+begin "image refresh: unlabeled local build whose repo digest names only the local image is rebuilt"
+TF_ENV=(FAKE_DOCKER_IMG_DIGESTS=t-forward@sha256:0123)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "out of date"; has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
+begin "image refresh: unlabeled pulled image (has a repo digest) is left alone"
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_lacks "out of date"; no_call build
+begin "image refresh: failed rebuild warns and still starts with the old image"
+TF_ENV=(FAKE_DOCKER_IMG_HASH=0000stale FAKE_DOCKER_BUILD_FAIL=1)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+err_has "rebuild failed; continuing with the existing t-forward:latest"; has_call run
+begin "image refresh: no build files next to the CLI -> no stale check"
+mkdir -p "$SB/lonely"; cp "$TF" "$SB/lonely/t-forward"
+TF_ENV=(FAKE_DOCKER_IMG_HASH=0000stale)
+TF=$SB/lonely/t-forward tf "${ADHOC_LOCAL[@]}"; rc 0
+out_lacks "out of date"
 
 # =================================================================== summary
 flush_failure
