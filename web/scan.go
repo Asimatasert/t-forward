@@ -465,7 +465,7 @@ func (s *Scanner) event(msg string) {
 
 // parseNmapGreppable extracts hosts + open ports from nmap -oG output lines like:
 //
-//	Host: 192.168.1.1 (router.lan)\tPorts: 80/open/tcp//http///, 443/open/tcp//https///
+//	Host: 192.0.2.1 (router.lan)\tPorts: 80/open/tcp//http///, 443/open/tcp//https///
 func parseNmapGreppable(text string) []scanDevice {
 	var devs []scanDevice
 	for _, ln := range strings.Split(text, "\n") {

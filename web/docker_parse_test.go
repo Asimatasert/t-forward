@@ -905,14 +905,14 @@ func TestDPMaybeAutoCodeGuards(t *testing.T) {
 // ---------------------------------------------------------------- hostConns / arpTable
 
 const dpLsof = `COMMAND     PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
-docker-pr  1234  me   10u  IPv4 0x1111111111      0t0  TCP 127.0.0.1:8023->192.168.1.50:51000 (ESTABLISHED)
-docker-pr  1234  me   11u  IPv4 0x2222222222      0t0  TCP 127.0.0.1:8023->192.168.1.50:51001 (ESTABLISHED)
+docker-pr  1234  me   10u  IPv4 0x1111111111      0t0  TCP 127.0.0.1:8023->192.0.2.50:51000 (ESTABLISHED)
+docker-pr  1234  me   11u  IPv4 0x2222222222      0t0  TCP 127.0.0.1:8023->192.0.2.50:51001 (ESTABLISHED)
 docker-pr  1234  me   12u  IPv4 0x3333333333      0t0  TCP 127.0.0.1:8023->10.0.0.9:51002 (ESTABLISHED)
-OrbStack   2222  me   13u  IPv4 0x4444444444      0t0  TCP 127.0.0.1:9000->192.168.1.77:40000 (ESTABLISHED)
+OrbStack   2222  me   13u  IPv4 0x4444444444      0t0  TCP 127.0.0.1:9000->192.0.2.77:40000 (ESTABLISHED)
 ssh        4567  me    5u  IPv4 0x5555555555      0t0  TCP 127.0.0.1:60000->127.0.0.1:8023 (ESTABLISHED)
 curl       4568  me    5u  IPv4 0x6666666666      0t0  TCP 127.0.0.1:60001->127.0.0.1:8023 (ESTABLISHED)
 psql       4569  me    5u  IPv4 0x7777777777      0t0  TCP 127.0.0.1:60002->127.0.0.1:9000 (ESTABLISHED)
-chrome     7890  me   30u  IPv4 0x8888888888      0t0  TCP 192.168.1.2:60003->8.8.8.8:443 (ESTABLISHED)
+chrome     7890  me   30u  IPv4 0x8888888888      0t0  TCP 192.0.2.2:60003->8.8.8.8:443 (ESTABLISHED)
 docker-pr  9999  me    7u  IPv4 0x9999999999      0t0  TCP nocolon->10.1.1.1:5 (ESTABLISHED)
 sshd       1111  me    3u  IPv4 0xaaaaaaaaaa      0t0  TCP *:22 (LISTEN)
 short line
@@ -929,11 +929,11 @@ func TestDPHostConns(t *testing.T) {
 		8023: {
 			{IP: "10.0.0.9", Port: 8023},
 			{IP: "127.0.0.1", Port: 8023, Proc: "ssh"}, // ssh first, curl on the same IP dropped
-			{IP: "192.168.1.50", Port: 8023},
+			{IP: "192.0.2.50", Port: 8023},
 		},
 		9000: {
 			{IP: "127.0.0.1", Port: 9000, Proc: "psql"},
-			{IP: "192.168.1.77", Port: 9000},
+			{IP: "192.0.2.77", Port: 9000},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -1080,7 +1080,7 @@ func TestDPTunnelNet(t *testing.T) {
 		"10.0.0.0/16 via 10.8.0.1",
 		"10.1.2.3 via 10.8.0.1",    // bare host route
 		"10.2.0.5/32 via 10.8.0.1", // /32 host route
-		"192.168.5.0/24 proto kernel scope link src 10.8.0.6",
+		"198.51.100.0/24 proto kernel scope link src 10.8.0.6",
 		"bogus/33 via x",
 		"",
 	}, "\n"), 0)
@@ -1093,7 +1093,7 @@ func TestDPTunnelNet(t *testing.T) {
 	for _, n := range nets {
 		got = append(got, n.String())
 	}
-	if want := []string{"10.0.0.0/16", "192.168.5.0/24"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"10.0.0.0/16", "198.51.100.0/24"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("nets = %v, want %v", got, want)
 	}
 	if s := subnetOf("10.0.3.4", nets); s != "10.0.0.0/16" {

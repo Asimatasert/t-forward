@@ -102,7 +102,7 @@
     <text x="832" y="387" fill="#5c6675">(postgres) :5432 &#8592; 5433</text>
 
     <rect x="820" y="430" width="164" height="42" rx="8" fill="#1a2029" stroke="#2a3340" opacity="0.5"/>
-    <text x="832" y="449" fill="#e8ecf1" font-size="11" font-weight="700" opacity="0.7">label printer</text><text x="832" y="463" fill="#5c6675">192.168.1.77</text>
+    <text x="832" y="449" fill="#e8ecf1" font-size="11" font-weight="700" opacity="0.7">label printer</text><text x="832" y="463" fill="#5c6675">192.0.2.77</text>
   </g>
 
   <!-- tag filter bar -->

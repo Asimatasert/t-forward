@@ -259,15 +259,15 @@ func TestDLClientsLoopReportsPeersAndRelogsAfterReconnect(t *testing.T) {
 	dpConf(t, d, "alpha", `{"name":"Alpha","hosts":[{"ip":"10.0.0.5","forwards":[{"remote":22,"local":8023}]}]}`)
 	dpOut(t, dir, "ps", dpPS("tf-alpha", "t-forward=1,t-forward.name=alpha"), 0)
 	dpOut(t, dir, "lsof", dpLsof, 0)
-	dpOut(t, dir, "arp", "? (192.168.1.50) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]\n", 0)
+	dpOut(t, dir, "arp", "? (192.0.2.50) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]\n", 0)
 	cl := d.hub.register()
 	clients := newDLFrames(cl, "clients")
 	stop := dlRun(t, d.ClientsLoop)
 
 	clients.waitFor(t, "clients frame", func(all []string) bool {
-		return dlHas(all, `"tun":"alpha"`, "192.168.1.50", "aa:bb:cc:dd:ee:ff")
+		return dlHas(all, `"tun":"alpha"`, "192.0.2.50", "aa:bb:cc:dd:ee:ff")
 	})
-	if !dpHasEvent(d.hub, "conn", "client 192.168.1.50 [aa:bb:cc:dd:ee:ff] -> localhost:8023") {
+	if !dpHasEvent(d.hub, "conn", "client 192.0.2.50 [aa:bb:cc:dd:ee:ff] -> localhost:8023") {
 		t.Errorf("no MAC-labelled conn event: %v", dpEvents(d.hub))
 	}
 	if !dpHasEvent(d.hub, "conn", "client 127.0.0.1 (ssh) -> localhost:8023") {
@@ -288,8 +288,8 @@ func TestDLClientsLoopReportsPeersAndRelogsAfterReconnect(t *testing.T) {
 		}
 		return c
 	}
-	if n := connsFrom("192.168.1.50"); n != 1 {
-		t.Fatalf("192.168.1.50 logged %d times on the first tick, want once", n)
+	if n := connsFrom("192.0.2.50"); n != 1 {
+		t.Fatalf("192.0.2.50 logged %d times on the first tick, want once", n)
 	}
 
 	// peers disappear -> forgotten; they come back -> logged again
@@ -298,9 +298,9 @@ func TestDLClientsLoopReportsPeersAndRelogsAfterReconnect(t *testing.T) {
 	dpWait(t, "an idle tick", func() bool { return dpCount(dir, "lsof") > n })
 	time.Sleep(400 * time.Millisecond) // let that tick finish before the peers return
 	dpOut(t, dir, "lsof", dpLsof, 0)
-	dpWait(t, "peer logged again after reconnect", func() bool { return connsFrom("192.168.1.50") == 2 })
+	dpWait(t, "peer logged again after reconnect", func() bool { return connsFrom("192.0.2.50") == 2 })
 	time.Sleep(2500 * time.Millisecond) // a steady peer is not logged a third time
-	if n := connsFrom("192.168.1.50"); n != 2 {
+	if n := connsFrom("192.0.2.50"); n != 2 {
 		t.Errorf("steady peer logged %d times, want 2", n)
 	}
 	stop()

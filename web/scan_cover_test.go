@@ -686,12 +686,12 @@ func TestHandleScanForwardNameWithoutIfaceAndUnknownService(t *testing.T) {
 	e, _ := scvActions(t)
 	e.useStubCLI(t, 0)
 
-	rec := doReq(e.a.handleScanForward, http.MethodPost, "/scan/forward", `{"ip":" 192.168.1.20 ","port":" 61234 "}`)
+	rec := doReq(e.a.handleScanForward, http.MethodPost, "/scan/forward", `{"ip":" 192.0.2.20 ","port":" 61234 "}`)
 	m := jsonBody(t, rec)
-	if m["ok"] != true || m["name"] != "scan-192-168-1-20-61234" {
+	if m["ok"] != true || m["name"] != "scan-192-0-2-20-61234" {
 		t.Fatalf("unexpected response %v", m)
 	}
-	b, err := os.ReadFile(confPath(e.d.confDir, "scan-192-168-1-20-61234"))
+	b, err := os.ReadFile(confPath(e.d.confDir, "scan-192-0-2-20-61234"))
 	if err != nil {
 		t.Fatal(err)
 	}
