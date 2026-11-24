@@ -788,9 +788,11 @@ func TestApplyEditsValuesCannotInjectYq(t *testing.T) {
 	for i, p := range payloads {
 		f := writeConf(t, sampleConf)
 		tag := tagPayloads[i%len(tagPayloads)]
+		// tunnel tags also forbid "," and "=" (they end up in a docker label)
+		tunnelTag := strings.NewReplacer(",", ";", "=", ":").Replace(tag)
 		e := confEdit{
 			Name:     strp(p),
-			Tags:     strsp(tag),
+			Tags:     strsp(tunnelTag),
 			Hosts:    map[string]hostEdit{"10.0.0.20": {Note: strp(p), Tags: strsp(tag)}},
 			Forwards: map[string]string{"10.0.0.20:22": p},
 			Subnets:  map[string]hostEdit{"10.0.0.0/16": {Note: strp(p), Tags: strsp(tag)}},
@@ -803,7 +805,7 @@ func TestApplyEditsValuesCannotInjectYq(t *testing.T) {
 		}
 		for expr, exp := range map[string]string{
 			".name": quote(p),
-			".tags": "[" + quote(tag) + "]",
+			".tags": "[" + quote(tunnelTag) + "]",
 			`.hosts[] | select(.ip == "10.0.0.20") | .name`:        quote(p),
 			`.hosts[] | select(.ip == "10.0.0.20") | .tags`:        "[" + quote(tag) + "]",
 			`.hosts[0].forwards[] | select(.remote == 22) | .note`: quote(p),
