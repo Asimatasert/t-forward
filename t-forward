@@ -641,6 +641,11 @@ up_one() {
         local) target="local relay" ;;
     esac
     info "Connecting '$name' ($target)..."
+    # tags go into one docker label; "," and "=" would let a tag fake other labels
+    case "$TAGS" in
+        *[,=]*) warn "$name: tags must not contain ',' or '='; replacing them with '_'"
+                TAGS=${TAGS//[,=]/_} ;;
+    esac
     local cid
     if ! cid=$(docker run -d --name "$cname" --network "$netname" \
             "${priv_args[@]}" \

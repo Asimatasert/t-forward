@@ -211,7 +211,15 @@ func TestDPDockerPortsCommandFails(t *testing.T) {
 // ---------------------------------------------------------------- State
 
 func dpPS(name, labels string) string {
-	b, _ := json.Marshal(map[string]string{"Names": name, "State": "running", "Labels": labels})
+	l := parseLabels(labels)
+	return dpPSRaw(name, labels, l[label+".name"], l[label+".type"], l[label+".tags"])
+}
+
+// dpPSRaw prints one ps line the way psFormat does: the joined Labels string
+// plus the exact label values docker looks up by key.
+func dpPSRaw(name, joined, lname, ltype, ltags string) string {
+	b, _ := json.Marshal(map[string]string{"Names": name, "State": "running", "Labels": joined,
+		"LabelName": lname, "LabelType": ltype, "LabelTags": ltags})
 	return string(b) + "\n"
 }
 
@@ -1131,6 +1139,54 @@ func TestDPParseBytesUnknownUnitIsBytes(t *testing.T) {
 		got, ok := parseBytes(in)
 		if !ok || got != want {
 			t.Errorf("parseBytes(%q) = %v, %v; want %v, true", in, got, ok, want)
+		}
+	}
+}
+
+// A tag that carries ",t-forward.name=..." must not change the tunnel ID: the
+// daemon reads the exact label values, not the comma-joined string.
+func TestDPForgedTagCannotSpoofName(t *testing.T) {
+	dir := dpTools(t)
+	d, _ := newTestDocker(t)
+	joined := "t-forward=1,t-forward.name=alpha,t-forward.tags=x,t-forward.name=beta"
+	dpOut(t, dir, "ps", dpPSRaw("tf-alpha", joined, "alpha", "ssh", "x,t-forward.name=beta"), 0)
+	_, names := d.runningContainers(t.Context())
+	if names["tf-alpha"] != "alpha" {
+		t.Fatalf("names = %v, forged tag changed the tunnel ID", names)
+	}
+	var found bool
+	for _, tn := range d.State() {
+		if tn.ID == "beta" {
+			t.Fatalf("State() produced a tunnel for the forged ID: %+v", tn)
+		}
+		if tn.ID == "alpha" {
+			found = true
+			if reflect.DeepEqual(tn.Tags, []string{"x,t-forward.name=beta"}) {
+				t.Fatalf("tag with , and = was passed through: %v", tn.Tags)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("alpha missing from State()")
+	}
+}
+
+// A name label that is not a valid tunnel name (e.g. a path) is not used as a
+// conf file name.
+func TestDPInvalidNameLabelFallsBack(t *testing.T) {
+	dir := dpTools(t)
+	d, _ := newTestDocker(t)
+	dpOut(t, dir, "ps", dpPSRaw("tf-alpha", "t-forward=1,t-forward.name=../../etc/x", "../../etc/x", "", ""), 0)
+	_, names := d.runningContainers(t.Context())
+	if names["tf-alpha"] != "alpha" {
+		t.Fatalf("names = %v, want fallback to container name", names)
+	}
+}
+
+func TestDPPSFormatUsesLabelLookup(t *testing.T) {
+	for _, k := range []string{"name", "type", "tags"} {
+		if !strings.Contains(psFormat, `(.Label "t-forward.`+k+`")`) {
+			t.Fatalf("psFormat lacks a .Label lookup for %s: %s", k, psFormat)
 		}
 	}
 }

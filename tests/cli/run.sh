@@ -528,8 +528,15 @@ call_env "VPN_USER=$INJ_USER"
 call_env "AUTHGROUP=g \"q\" 's' && x"
 call_pair -l 't-forward.name=My VPN;$(id)'
 call_pair -l 't-forward.tags=a;b $(c)'
+
 call_pair --name tf-my-vpn-id; call_pair --network tf-net-my-vpn-id
 for f in PWNED PWNED2 PWNED3; do absent "$SB/work/$f"; absent "$ROOT/$f"; done
+
+begin "docker run: ',' and '=' in tags cannot forge other labels"
+tf up --server vpn.example.com --user u --protocol gp --password-file "$SB/pw" --name tagforge \
+   --tags 'x,t-forward.name=evil y=z'
+rc 0; err_has "tags must not contain"; has_call run
+call_pair -l 't-forward.tags=x_t-forward.name_evil y_z'; call_pair -l 't-forward.name=tagforge'
 
 begin "docker run: newline in a value cannot smuggle a second docker option"
 tf up --server $'vpn.example.com\n--privileged' --user u --protocol gp --password-file "$SB/pw" --name nl
