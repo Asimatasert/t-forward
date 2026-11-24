@@ -68,6 +68,11 @@ func main() {
 		log.Fatalf("embed panel: %v", err)
 	}
 
+	var sessions *browserSessions
+	if !*noAuth {
+		sessions = newBrowserSessions(*configDir, tok)
+	}
+
 	hub := NewHub()
 	dock := NewDocker(hub, *configDir, *tfPath)
 	dock.allowTotpCmd = *allowTotpCmd
@@ -88,21 +93,21 @@ func main() {
 		// The panel is rebuilt with the daemon; never let the browser serve a
 		// stale cached copy after an upgrade.
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		// The panel is reached once through /?token=<tok>; hand the secret off to a
-		// SameSite=Strict, HttpOnly cookie so every SUBSEQUENT request (SSE, polling,
-		// actions) authenticates via the cookie instead of a ?token= query string.
-		// That keeps the token out of per-request URLs (browser history, proxy logs)
-		// and — being SameSite=Strict — is never attached to a cross-site request.
+		// The panel is reached once through /?token=<tok>; that load starts a
+		// browser session (see session.go) so every SUBSEQUENT request (SSE,
+		// polling, actions) authenticates with the session cookie plus the
+		// origin-scoped key instead of a ?token= query string. That keeps the
+		// token out of per-request URLs (browser history, proxy logs) and out of
+		// the cookie, which the browser also sends to other ports of this host.
+		page := panel
 		if !*noAuth {
-			http.SetCookie(w, &http.Cookie{
-				Name:     "tf_token",
-				Value:    tok,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+			// A cookie-only reload passed tokenMiddleware without proving the
+			// token: it gets the static page and no key.
+			if presentedToken(r) != "" {
+				page = sessions.start(w, r, panel)
+			}
 		}
-		_, _ = w.Write(panel)
+		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/events", hub.ServeHTTP)
 	mux.HandleFunc("/evlog", hub.ServeEvLog)
@@ -158,7 +163,7 @@ func main() {
 
 	var handler http.Handler = mux
 	if !*noAuth {
-		handler = tokenMiddleware(tok, mux)
+		handler = tokenMiddleware(tok, sessions, mux)
 	}
 	// Outermost guard (runs even under -no-auth): reject DNS-rebinding Host values
 	// and browser-reported cross-site requests, so a malicious web page the operator
@@ -167,6 +172,8 @@ func main() {
 	// Anti-framing headers on every response, including the 401/403/415 written
 	// by the two middlewares above.
 	handler = securityHeaders(handler)
+	// Outermost, so that it also covers the 401/403 answers of the middlewares.
+	handler = expireLegacyTokenCookie(handler)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -269,11 +276,17 @@ func randomToken() string {
 // tokenMiddleware enforces a constant-time token check on every route. The
 // token may arrive as an Authorization: Bearer header, an X-Token header, or
 // ?token= as a fallback. Headers are preferred and should be used by API
-// callers. The ?token= form is retained only because browsers (initial panel
-// load) and EventSource/SSE cannot set request headers; because a query string
-// can land in browser history and proxy access logs, the daemon must remain
-// bound to 127.0.0.1 and must never be fronted by a logging reverse proxy.
-func tokenMiddleware(want string, next http.Handler) http.Handler {
+// callers. The ?token= form is retained only because a browser cannot set
+// request headers on the initial panel load; because a query string can land in
+// browser history and proxy access logs, the daemon must remain bound to
+// 127.0.0.1 and must never be fronted by a logging reverse proxy.
+//
+// A request that presents no token may instead carry a browser session (sess,
+// nil to disable): the tf_session cookie AND its X-Session-Key header. The
+// cookie alone is never enough — the browser also sends it to forwarded
+// services on other ports of this host — except to re-serve the static panel
+// page on a reload, which reveals nothing and receives no key.
+func tokenMiddleware(want string, sess *browserSessions, next http.Handler) http.Handler {
 	wantB := []byte(want)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -286,26 +299,45 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		var got string
-		if h := r.Header.Get("Authorization"); h != "" {
-			got = trimBearer(h)
-		}
-		if got == "" {
-			got = r.Header.Get("X-Token")
-		}
-		// Cookie carries the token on every request after the initial panel load
-		// (set by the / handler), so SSE/polling/actions need no ?token= in the URL.
-		if got == "" {
-			if ck, err := r.Cookie("tf_token"); err == nil {
-				got = ck.Value
+		// An explicitly presented token decides alone: a wrong one is never
+		// rescued by a session, and a stale cookie never blocks a right one.
+		if got := presentedToken(r); got != "" {
+			if subtle.ConstantTimeCompare([]byte(got), wantB) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
+			next.ServeHTTP(w, r)
+			return
 		}
-		if got == "" {
-			got = r.URL.Query().Get("token")
+		id, ok := "", false
+		if sess != nil {
+			id, ok = sess.cookieID(r)
 		}
-		if subtle.ConstantTimeCompare([]byte(got), wantB) != 1 {
+		if ok && !sess.keyValid(id, r.Header.Get(sessionKeyHeader)) {
+			ok = r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead)
+		}
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// legacyTokenCookie is the cookie in which releases up to v0.8.0 kept the raw
+// daemon token. It is no credential any more, but a browser that still holds it
+// keeps sending the token to every port of this host, forwarded services
+// included.
+const legacyTokenCookie = "tf_token"
+
+// expireLegacyTokenCookie tells the browser to drop that cookie on any response
+// to a request that carries it, whatever the outcome. It cannot wait for a
+// successful panel load: an upgraded browser has no session yet, so everything
+// it sends is answered 401 until the /?token= link is opened again.
+func expireLegacyTokenCookie(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie(legacyTokenCookie); err == nil {
+			http.SetCookie(w, &http.Cookie{Name: legacyTokenCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		}
 		next.ServeHTTP(w, r)
 	})

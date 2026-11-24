@@ -350,12 +350,15 @@ func okHandler() http.Handler {
 
 func TestTokenMiddleware(t *testing.T) {
 	const tok = "s3cret-token"
-	h := tokenMiddleware(tok, okHandler())
+	sess := newBrowserSessions(t.TempDir(), tok)
+	h := tokenMiddleware(tok, sess, okHandler())
+	id := sess.newID()
+	session, key := sess.cookieValue(id), sess.key(id)
 	cases := []struct {
 		name   string
 		path   string
 		header map[string]string
-		cookie string
+		cookie string // tf_session value
 		want   int
 	}{
 		{"no credentials", "/state", nil, "", 401},
@@ -366,8 +369,20 @@ func TestTokenMiddleware(t *testing.T) {
 		{"empty bearer", "/state", map[string]string{"Authorization": "Bearer "}, "", 401},
 		{"X-Token", "/state", map[string]string{"X-Token": tok}, "", 418},
 		{"wrong X-Token", "/state", map[string]string{"X-Token": "x"}, "", 401},
-		{"cookie", "/state", nil, tok, 418},
+		// The browser sends cookies to every port of the host, so a cookie alone
+		// is never a credential — not the session cookie, and not the raw token
+		// in a cookie (the old tf_token behaviour).
+		{"session cookie alone", "/state", nil, session, 401},
+		{"token as cookie value", "/state", nil, tok, 401},
 		{"wrong cookie", "/state", nil, "x", 401},
+		{"session cookie + key", "/state", map[string]string{"X-Session-Key": key}, session, 418},
+		{"session cookie + wrong key", "/state", map[string]string{"X-Session-Key": session}, session, 401},
+		{"key without cookie", "/state", map[string]string{"X-Session-Key": key}, "", 401},
+		{"forged cookie + key", "/state", map[string]string{"X-Session-Key": key}, id + "." + key, 401},
+		// a reload re-serves the static panel on the cookie alone, nothing else
+		{"session cookie alone on the panel page", "/", nil, session, 418},
+		{"forged cookie on the panel page", "/", nil, id + "." + key, 401},
+		{"session cookie alone on /version", "/version", nil, session, 401},
 		{"query", "/state?token=" + tok, nil, "", 418},
 		{"wrong query", "/state?token=x", nil, "", 401},
 		{"empty query token", "/state?token=", nil, "", 401},
@@ -378,12 +393,14 @@ func TestTokenMiddleware(t *testing.T) {
 		{"healthz subpath is not exempt", "/healthz/", nil, "", 401},
 		{"version is gated", "/version", nil, "", 401},
 		{"root is gated", "/", nil, "", 401},
-		// Authorization wins over the other sources: a wrong bearer is not
-		// rescued by a right cookie.
-		{"wrong bearer beats right cookie", "/state", map[string]string{"Authorization": "Bearer nope"}, tok, 401},
+		// A presented token decides alone: a wrong one is not rescued by a valid
+		// session, and a stale cookie does not block a right one (otherwise the
+		// /?token= link would stop working after a token change).
+		{"wrong bearer beats session", "/state", map[string]string{"Authorization": "Bearer nope", "X-Session-Key": key}, session, 401},
 		{"right bearer beats wrong cookie", "/state", map[string]string{"Authorization": "Bearer " + tok}, "x", 418},
-		{"X-Token beats cookie", "/state", map[string]string{"X-Token": "x"}, tok, 401},
-		{"cookie beats query", "/state?token=" + tok, nil, "x", 401},
+		{"wrong X-Token beats session", "/state", map[string]string{"X-Token": "x", "X-Session-Key": key}, session, 401},
+		{"wrong query beats session", "/state?token=x", map[string]string{"X-Session-Key": key}, session, 401},
+		{"right query beats stale cookie", "/state?token=" + tok, nil, "x", 418},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -392,7 +409,7 @@ func TestTokenMiddleware(t *testing.T) {
 				req.Header.Set(k, v)
 			}
 			if c.cookie != "" {
-				req.AddCookie(&http.Cookie{Name: "tf_token", Value: c.cookie})
+				req.AddCookie(&http.Cookie{Name: "tf_session", Value: c.cookie})
 			}
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
@@ -412,7 +429,7 @@ func TestTokenMiddleware(t *testing.T) {
 // random one, and -no-auth skips the middleware); tokenMiddleware now fails
 // closed anyway as defence-in-depth.
 func TestTokenMiddlewareEmptyTokenRejectsAnonymous(t *testing.T) {
-	h := tokenMiddleware("", okHandler())
+	h := tokenMiddleware("", newBrowserSessions(t.TempDir(), ""), okHandler())
 	for _, path := range []string{"/state", "/"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -534,7 +551,7 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusTeapot)
 	})
-	chain := securityHeaders(guardMiddleware("127.0.0.1", nil, tokenMiddleware("tok", inner)))
+	chain := securityHeaders(guardMiddleware("127.0.0.1", nil, tokenMiddleware("tok", nil, inner)))
 	cases := []struct {
 		name   string
 		path   string
@@ -579,7 +596,7 @@ func TestSecurityHeaders(t *testing.T) {
 func TestMiddlewareOrder(t *testing.T) {
 	var reached bool
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true })
-	chain := guardMiddleware("127.0.0.1", nil, tokenMiddleware("tok", inner))
+	chain := guardMiddleware("127.0.0.1", nil, tokenMiddleware("tok", nil, inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/state", nil)
 	req.Host = "evil.example.com"
@@ -1123,7 +1140,7 @@ func TestMainAuthAndGuardOverHTTP(t *testing.T) {
 			{"none", "/state", map[string]string{"Authorization": "-"}, 401},
 			{"bearer", "/state", nil, 200},
 			{"X-Token", "/state", map[string]string{"Authorization": "-", "X-Token": tok}, 200},
-			{"cookie", "/state", map[string]string{"Authorization": "-", "Cookie": "tf_token=" + tok}, 200},
+			{"token in a cookie is no credential", "/state", map[string]string{"Authorization": "-", "Cookie": "tf_token=" + tok}, 401},
 			{"query", "/state?token=" + tok, map[string]string{"Authorization": "-"}, 200},
 			{"wrong bearer", "/state", map[string]string{"Authorization": "Bearer wrong"}, 401},
 			{"wrong query", "/state?token=wrong", map[string]string{"Authorization": "-"}, 401},
@@ -1302,8 +1319,14 @@ func TestMainStaticPanel(t *testing.T) {
 	if r.code != 200 {
 		t.Fatalf("GET /?token= = %d", r.code)
 	}
-	if r.body != string(disk) {
-		t.Errorf("served panel (%d bytes) differs from panel/index.html (%d bytes)", len(r.body), len(disk))
+	// the served page is panel/index.html with only the session key filled in
+	const keyMeta = `<meta name="tf-session-key" content="">`
+	if strings.Count(string(disk), keyMeta) != 1 {
+		t.Fatalf("panel/index.html must contain the %s placeholder exactly once", keyMeta)
+	}
+	key := pageSessionKey(r.body)
+	if want := strings.Replace(string(disk), keyMeta, `<meta name="tf-session-key" content="`+key+`">`, 1); key == "" || r.body != want {
+		t.Errorf("served panel (%d bytes, key %q) differs from panel/index.html (%d bytes) + key", len(r.body), key, len(disk))
 	}
 	if ct := r.hdr.Get("Content-Type"); ct != "text/html; charset=utf-8" {
 		t.Errorf("Content-Type = %q", ct)
@@ -1314,18 +1337,22 @@ func TestMainStaticPanel(t *testing.T) {
 	if got := r.hdr.Get("Cache-Control"); got != "no-store, must-revalidate" {
 		t.Errorf("Cache-Control = %q", got)
 	}
-	ck := r.cookie("tf_token")
+	ck := r.cookie("tf_session")
 	if ck == nil {
-		t.Fatal("no tf_token cookie handed out")
+		t.Fatal("no tf_session cookie handed out")
 	}
-	if ck.Value != tok || !ck.HttpOnly || ck.SameSite != http.SameSiteStrictMode || ck.Path != "/" {
-		t.Errorf("cookie = %+v, want HttpOnly SameSite=Strict Path=/ with the token", ck)
+	if strings.Contains(ck.Value, tok) || !ck.HttpOnly || ck.SameSite != http.SameSiteStrictMode || ck.Path != "/" {
+		t.Errorf("cookie = %+v, want HttpOnly SameSite=Strict Path=/ without the token", ck)
 	}
 
-	// the cookie alone authenticates the follow-up requests, no ?token= needed
-	r2 := d.req("GET", "/state", "", map[string]string{"Authorization": "-", "Cookie": "tf_token=" + ck.Value})
+	// cookie + key authenticate the follow-up requests, no ?token= needed; the
+	// cookie alone does not (see session_test.go)
+	r2 := d.req("GET", "/state", "", map[string]string{"Authorization": "-", "Cookie": "tf_session=" + ck.Value, "X-Session-Key": key})
 	if r2.code != 200 {
-		t.Errorf("cookie-authenticated /state = %d", r2.code)
+		t.Errorf("session-authenticated /state = %d", r2.code)
+	}
+	if r3 := d.req("GET", "/state", "", map[string]string{"Authorization": "-", "Cookie": "tf_session=" + ck.Value}); r3.code != 401 {
+		t.Errorf("cookie-only /state = %d, want 401", r3.code)
 	}
 
 	// HEAD: headers, no body
@@ -1540,6 +1567,7 @@ func TestMainPrivilegedRoutesFollowAdminGate(t *testing.T) {
 		t.Fatalf("setting the PIN: %d %s cookie=%v", r.code, r.body, r.cookie("tf_admin"))
 	}
 	adminCookie := r.cookie("tf_admin")
+	key := bodyAdminKey(r.body)
 	if g := d.req("GET", "/settings", "", nil); !strings.Contains(g.body, `"adminSet":true`) {
 		t.Errorf("GET /settings = %s", g.body)
 	}
@@ -1557,9 +1585,14 @@ func TestMainPrivilegedRoutesFollowAdminGate(t *testing.T) {
 			t.Errorf("%s %s without admin session = %d %q, want 403 needPin", c.method, c.path, r.code, r.body)
 		}
 		// the same request with the session reaches the handler (anything but 403)
-		r = d.req(c.method, c.path, c.body, map[string]string{"Cookie": adminCookie.String()})
+		r = d.req(c.method, c.path, c.body, map[string]string{"Cookie": adminCookie.String(), "X-Admin-Key": key})
 		if r.code == 403 && strings.Contains(r.body, "needPin") {
 			t.Errorf("%s %s with admin session still locked: %q", c.method, c.path, r.body)
+		}
+		// the cookie without its origin-scoped key stays locked
+		r = d.req(c.method, c.path, c.body, map[string]string{"Cookie": adminCookie.String()})
+		if r.code != 403 || !strings.Contains(r.body, `"needPin":true`) {
+			t.Errorf("%s %s with the admin cookie alone = %d %q, want 403 needPin", c.method, c.path, r.code, r.body)
 		}
 	}
 	// a wrong session header is refused as well
@@ -1596,7 +1629,7 @@ func TestMainPrivilegedRoutesFollowAdminGate(t *testing.T) {
 	if u.code != 200 || u.cookie("tf_admin") == nil {
 		t.Fatalf("unlock = %d %s", u.code, u.body)
 	}
-	if r := d.req("POST", "/conf/nosuch", `{}`, map[string]string{"Cookie": u.cookie("tf_admin").String()}); r.code != 404 {
+	if r := d.req("POST", "/conf/nosuch", `{}`, map[string]string{"Cookie": u.cookie("tf_admin").String(), "X-Admin-Key": bodyAdminKey(u.body)}); r.code != 404 {
 		t.Errorf("after unlock /conf/ = %d, want 404 from the handler", r.code)
 	}
 }

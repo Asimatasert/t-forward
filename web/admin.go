@@ -83,6 +83,7 @@ type adminGate struct {
 	sessions    map[string]time.Time // token -> expiry
 	fails       int
 	lockedUntil time.Time
+	keySecret   []byte           // derives each session's origin-scoped key; random per process
 	verifyMu    sync.Mutex       // serialises PIN checks: PBKDF2 is costly, attempts are counted in order
 	now         func() time.Time // test hook
 }
@@ -142,6 +143,33 @@ func (g *adminGate) validSession(tok string) bool {
 		return false
 	}
 	return true
+}
+
+// sessionKey returns the origin-scoped key that must accompany a session's
+// cookie. The tf_admin cookie is also sent to forwarded services on other ports
+// of this host, so it must not pass the gate alone; the key is returned to the
+// panel in the response body, kept in its origin-scoped storage and sent back in
+// X-Admin-Key. It is an HMAC under a per-process secret, so it cannot be
+// derived from the cookie.
+func (g *adminGate) sessionKey(tok string) string {
+	g.mu.Lock()
+	if g.keySecret == nil {
+		g.keySecret = make([]byte, 32)
+		if _, err := rand.Read(g.keySecret); err != nil {
+			panic("crypto/rand: " + err.Error())
+		}
+	}
+	secret := g.keySecret
+	g.mu.Unlock()
+	return macHex(secret, tok)
+}
+
+// validSessionKey reports whether tok is a live session and key its key.
+func (g *adminGate) validSessionKey(tok, key string) bool {
+	if !g.validSession(tok) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(g.sessionKey(tok))) == 1
 }
 
 // revokeAll drops every session (used when the PIN changes).
@@ -241,4 +269,12 @@ func setAdminCookie(w http.ResponseWriter, tok string) {
 		Name: "tf_admin", Value: tok, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
 	})
+}
+
+// startAdminSession mints a session, sets its cookie and returns the key the
+// caller must hand to the panel in the response body.
+func (a *Actions) startAdminSession(w http.ResponseWriter) string {
+	tok := a.gate.newSession()
+	setAdminCookie(w, tok)
+	return a.gate.sessionKey(tok)
 }

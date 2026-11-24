@@ -498,7 +498,19 @@ func TestSettingsPostRequiresPrivilegeOncePinSet(t *testing.T) {
 		if c == nil {
 			t.Fatal("unlock failed")
 		}
-		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Token": "nope-nope"}, c))
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Token": "nope-nope", "X-Admin-Key": adminKey(unlock)}, c))
+	})
+	t.Run("a valid cookie without its origin-scoped key", func(t *testing.T) {
+		unlock := postJSON(e.a.handleAdminUnlock, "/admin/unlock", `{"pin":"correct-pin"}`, nil)
+		c := adminCookie(unlock)
+		if c == nil || adminKey(unlock) == "" {
+			t.Fatal("unlock failed")
+		}
+		assertRefused(t, e.postSettings(attempt, nil, c))
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Key": c.Value}, c))
+		other := e.a.gate.sessionKey(e.a.gate.newSession())
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Key": other}, c))
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Key": adminKey(unlock)}))
 	})
 
 	t.Run("valid session cookie", func(t *testing.T) {
@@ -507,18 +519,16 @@ func TestSettingsPostRequiresPrivilegeOncePinSet(t *testing.T) {
 		if c == nil {
 			t.Fatal("unlock failed")
 		}
-		rec := e.postSettings(`{"telegramChatId":"via-cookie"}`, nil, c)
+		rec := e.postSettings(`{"telegramChatId":"via-cookie"}`, map[string]string{"X-Admin-Key": adminKey(unlock)}, c)
 		if rec.Code != http.StatusOK || e.a.loadSettings().Telegram.ChatID != "via-cookie" {
 			t.Errorf("status %d, saved %+v", rec.Code, e.a.loadSettings().Telegram)
 		}
 	})
 
-	t.Run("valid session token in header", func(t *testing.T) {
-		tok := e.a.gate.newSession()
-		rec := e.postSettings(`{"telegramChatId":"via-session-header"}`, map[string]string{"X-Admin-Token": tok})
-		if rec.Code != http.StatusOK || e.a.loadSettings().Telegram.ChatID != "via-session-header" {
-			t.Errorf("status %d, saved %+v", rec.Code, e.a.loadSettings().Telegram)
-		}
+	// The session token is the tf_admin cookie value, which the browser also
+	// sends to other ports of the host: replayed as a header it must not pass.
+	t.Run("session token in header is not a credential", func(t *testing.T) {
+		assertRefused(t, e.postSettings(attempt, map[string]string{"X-Admin-Token": e.a.gate.newSession()}))
 	})
 
 	t.Run("the PIN itself in header (API clients)", func(t *testing.T) {
@@ -669,7 +679,9 @@ func TestSettingsPrivilegedWrapper(t *testing.T) {
 		e.writeSettings(t, Settings{AdminSecretHash: hashPIN("correct-pin")})
 		h, n := newHandler(e)
 		req := httptest.NewRequest(http.MethodPost, "/x", nil)
-		req.AddCookie(&http.Cookie{Name: "tf_admin", Value: e.a.gate.newSession()})
+		tok := e.a.gate.newSession()
+		req.AddCookie(&http.Cookie{Name: "tf_admin", Value: tok})
+		req.Header.Set("X-Admin-Key", e.a.gate.sessionKey(tok))
 		rec := httptest.NewRecorder()
 		h(rec, req)
 		if rec.Code != http.StatusOK || *n != 1 {

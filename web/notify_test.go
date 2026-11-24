@@ -485,6 +485,7 @@ func TestNotifyTestEndpointIsPrivileged(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/notify/test", strings.NewReader(`{"telegramToken":"t","telegramChatId":"1"}`))
 	req.AddCookie(c)
+	req.Header.Set("X-Admin-Key", adminKey(unlock))
 	ok := httptest.NewRecorder()
 	h(ok, req)
 	if m := jsonBody(t, ok); m["ok"] != true {

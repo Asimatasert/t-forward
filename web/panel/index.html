@@ -1,4 +1,5 @@
 <meta name="referrer" content="no-referrer">
+<meta name="tf-session-key" content="">
 <title>t-forward — Tunnel Map</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2310141a'/%3E%3Ccircle cx='9' cy='23' r='3.4' fill='none' stroke='%23d98e4a' stroke-width='2.2'/%3E%3Ccircle cx='23' cy='9' r='3.4' fill='none' stroke='%23d98e4a' stroke-width='2.2'/%3E%3Cpath d='M11.5 20.5 L20.5 11.5' stroke='%23d98e4a' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
@@ -928,7 +929,7 @@ function persistLayout() {
   layoutSaveTimer = setTimeout(() => {
     fetch(withTok("/layout"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(savedPos),
     }).catch(() => {});
   }, 400);
@@ -2500,23 +2501,50 @@ function openURI(uri) {
 }
 
 /* ======================================================= live wiring (SSE) */
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
-// Scrub the token from the address bar and history immediately after reading it,
-// so it cannot leak via bookmarks, the back/forward cache, or a Referer header.
-// The value survives only in this in-memory constant; SSE still needs it as a
-// query param (EventSource cannot set headers), but the persisted URL is clean.
+// Scrub the token from the address bar and history immediately, so it cannot
+// leak via bookmarks, the back/forward cache, or a Referer header. The page does
+// not keep it either: the daemon answered that load with a session.
 try {
-  if (TOKEN && location.search) {
-    const u = new URL(location.href);
+  const u = new URL(location.href);
+  if (u.searchParams.has("token")) {
     u.searchParams.delete("token");
     history.replaceState(null, "", u.pathname + u.search + u.hash);
   }
 } catch (e) { /* replaceState unavailable (e.g. file://); ignore */ }
-// The daemon hands the token to a SameSite=Strict, HttpOnly cookie on the initial
-// /?token= load, so every subsequent request authenticates via that cookie (SSE
-// and fetch alike) — no need to append ?token= to any URL. fetch also sends the
-// in-memory token as an X-Token header as a belt-and-suspenders fallback; only
-// EventSource, which cannot set headers, depends solely on the cookie.
+// On the /?token= load the daemon starts a session in two halves: an HttpOnly
+// cookie, and a key it writes into the tf-session-key meta tag. A cookie is
+// scoped by host, not port, so the browser also sends it to every forwarded
+// service opened on this hostname — the daemon therefore accepts it only
+// together with the key, which stays in this origin's storage (an origin
+// includes the port) and travels in a request header. Every request, the event
+// stream included, goes through fetch so it can carry that header.
+// Both keys live in localStorage and are re-read per request, so every tab of
+// this origin follows the newest session. A key alone is not a credential, but
+// script running in this origin can read it, and a key together with its cookie
+// is a complete session that also works outside the browser.
+let SESSION_KEY = "";
+try {
+  const m = document.querySelector('meta[name="tf-session-key"]');
+  SESSION_KEY = (m && m.content) || "";
+  if (m) m.setAttribute("content", "");   // one copy fewer; storage still has it
+  if (SESSION_KEY) localStorage.setItem("tf.sessionKey", SESSION_KEY);
+} catch (e) { /* storage unavailable: the key lasts for this page load only */ }
+// same split for the admin session (tf_admin cookie + key from /admin/unlock)
+let adminKey = "";
+function setAdminKey(k) {
+  adminKey = k || "";
+  try { if (adminKey) localStorage.setItem("tf.adminKey", adminKey); else localStorage.removeItem("tf.adminKey"); } catch (e) {}
+}
+function authHeaders(extra) {
+  const h = Object.assign({}, extra);
+  try {
+    SESSION_KEY = localStorage.getItem("tf.sessionKey") || SESSION_KEY;
+    adminKey = localStorage.getItem("tf.adminKey") || adminKey;
+  } catch (e) {}
+  if (SESSION_KEY) h["X-Session-Key"] = SESSION_KEY;
+  if (adminKey) h["X-Admin-Key"] = adminKey;
+  return h;
+}
 const withTok = (p) => p;
 
 // POST an action to the daemon; body is JSON. Shows a toast with the outcome.
@@ -2524,7 +2552,7 @@ async function action(path, body, okMsg) {
   try {
     const r = await fetch(withTok(path), {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
     });
     const j = await r.json().catch(() => ({}));
@@ -2542,7 +2570,7 @@ let adminUnlocked = sessionStorage.getItem("tf.adminUnlocked") === "1";
 function openSettings() { document.getElementById("settings-modal").hidden = false; renderSettings(); }
 function closeSettings() { document.getElementById("settings-modal").hidden = true; }
 async function fetchSettings() {
-  try { const r = await fetch(withTok("/settings"), { headers: { "X-Token": TOKEN } }); return r.ok ? await r.json() : null; }
+  try { const r = await fetch(withTok("/settings"), { headers: authHeaders() }); return r.ok ? await r.json() : null; }
   catch (e) { return null; }
 }
 function settingsLockScreen(el) {
@@ -2558,10 +2586,10 @@ function settingsLockScreen(el) {
   const go = async () => {
     const pin = el.querySelector("#set-pin").value;
     const r = await fetch(withTok("/admin/unlock"), {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ pin }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) { adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); renderSettings(); }
+    if (r.ok && j.ok) { setAdminKey(j.adminKey); adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); renderSettings(); }
     else el.querySelector("#set-lock-msg").textContent = r.status === 429 ? "too many attempts — wait a moment and try again" : "wrong PIN";
   };
   el.querySelector("#set-unlock").addEventListener("click", go);
@@ -2633,7 +2661,7 @@ async function testNotify(el, event) {
   }
   try {
     const r = await fetch(withTok("/notify/test"), {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok) msg.textContent = "sent ✓";
@@ -2654,14 +2682,14 @@ async function saveSettings(el, prev) {
   const tgtoken = el.querySelector("#set-tgtoken").value;
   if (tgtoken) body.telegramToken = tgtoken;
   const r = await fetch(withTok("/settings"), {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (r.ok && j.ok) {
-    if (pin) { adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); }
+    if (pin) { setAdminKey(j.adminKey); adminUnlocked = true; sessionStorage.setItem("tf.adminUnlocked", "1"); }
     toast("settings saved"); renderSettings();
   } else if (r.status === 403) {
-    adminUnlocked = false; sessionStorage.removeItem("tf.adminUnlocked");
+    adminUnlocked = false; sessionStorage.removeItem("tf.adminUnlocked"); setAdminKey("");
     renderSettings();
   } else {
     el.querySelector("#set-save-msg").textContent = "save failed: " + (j.error || r.status);
@@ -2854,10 +2882,11 @@ function applyStat(s) {
 // SSE stream for state, so if that stream was slow to open (or blocked), the
 // panel stayed blank. This fetch guarantees the tunnels/ports show up, and a
 // poll below keeps them current whenever SSE goes quiet.
-let lastStateAt = 0;
+let lastStateAt = 0, authWarned = false;
 async function pullState() {
   try {
-    const r = await fetch(withTok("/state"), { headers: { "X-Token": TOKEN } });
+    const r = await fetch(withTok("/state"), { headers: authHeaders() });
+    if (r.status === 401 && !authWarned) { authWarned = true; toast("not signed in — open the panel through its /?token= link"); }
     if (!r.ok) return;
     applyState(await r.json());
     lastStateAt = Date.now();
@@ -2871,7 +2900,7 @@ async function pullState() {
 let evSeq = 0;
 async function pullEvlog() {
   try {
-    const r = await fetch(withTok("/evlog?since=" + evSeq), { headers: { "X-Token": TOKEN } });
+    const r = await fetch(withTok("/evlog?since=" + evSeq), { headers: authHeaders() });
     if (!r.ok) return;
     const d = await r.json();
     (d.events || []).forEach((e) => {
@@ -2882,9 +2911,51 @@ async function pullEvlog() {
   } catch (e) { /* offline; the poll retries */ }
 }
 
+// EventSource cannot set request headers, so it could only authenticate with the
+// cookie. Read the stream with fetch instead (it sends the session key) and
+// dispatch the frames to the same addEventListener-style handlers.
+function sseStream(path) {
+  const handlers = {};
+  const dispatch = (block) => {
+    let type = "message"; const data = [];
+    block.split("\n").forEach((line) => {
+      if (line.startsWith("event:")) type = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    });
+    if (data.length && handlers[type]) handlers[type]({ data: data.join("\n") });
+  };
+  (async () => {
+    // Reconnect like EventSource did, but back off: 3 s after a stream that had
+    // opened, doubling up to 30 s while the daemon stays unreachable, and 30 s
+    // straight away when it answers "not signed in" (EventSource gave up there).
+    const MIN = 3000, MAX = 30000;
+    let delay = MIN;
+    for (;;) {
+      try {
+        const r = await fetch(withTok(path), { headers: authHeaders({ Accept: "text/event-stream" }), cache: "no-store" });
+        if (r.status === 401 || r.status === 403) delay = MAX;
+        if (r.ok && r.body) {
+          delay = MIN;
+          const rd = r.body.getReader(), dec = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { value, done } = await rd.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+            for (let i; (i = buf.indexOf("\n\n")) >= 0; buf = buf.slice(i + 2)) dispatch(buf.slice(0, i));
+          }
+        }
+      } catch (e) { /* dropped or offline; reconnect below */ }
+      await new Promise((res) => setTimeout(res, delay));
+      delay = Math.min(delay * 2, MAX);
+    }
+  })();
+  return { addEventListener: (type, fn) => { handlers[type] = fn; } };
+}
+
 let es = null;
 function connectSSE() {
-  es = new EventSource(withTok("/events"));
+  es = sseStream("/events");
   es.addEventListener("state", (e) => { try { applyState(JSON.parse(e.data)); lastStateAt = Date.now(); } catch {} });
   es.addEventListener("stat",  (e) => { try { applyStat(JSON.parse(e.data)); } catch {} });
   es.addEventListener("event", (e) => {
@@ -2929,7 +3000,6 @@ function connectSSE() {
       if (view === "lan") { updateLanBar(); layout(); renderPanel(); }
     } catch {}
   });
-  es.onerror = () => { /* EventSource auto-reconnects; nothing to do */ };
 }
 
 window.addEventListener("resize", layout);
@@ -2958,7 +3028,7 @@ try { const v = localStorage.getItem("tf.view"); if (v === "map" || v === "tree"
 setView(savedView);
 // shared hand-arranged layout from the server (source of truth across machines);
 // falls back to whatever localStorage already seeded if the request fails
-fetch(withTok("/layout"), { headers: { "X-Token": TOKEN } })
+fetch(withTok("/layout"), { headers: authHeaders() })
   .then((r) => (r.ok ? r.json() : null))
   .then((d) => { if (d && typeof d === "object" && Object.keys(d).length) { savedPos = d; if (view === "map") layout(); } })
   .catch(() => {});
@@ -2971,7 +3041,7 @@ pullEvlog();   // seed the console with recent history (SSE has no replay)
 // same gate for the console: a dead SSE stream also delivers no state frames
 setInterval(() => { if (Date.now() - lastStateAt > 8000) pullEvlog(); }, 4000);
 // pull the last discovery snapshot once (SSE only pushes on change)
-fetch(withTok("/scan"), { headers: { "X-Token": TOKEN } })
+fetch(withTok("/scan"), { headers: authHeaders() })
   .then((r) => r.json())
   .then((d) => { scan = d || scan; scan.interfaces = scan.interfaces || []; if (view === "lan") { renderTagbar(); layout(); renderPanel(); } })
   .catch(() => {});

@@ -48,6 +48,12 @@ func adminCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
+// adminKey returns the origin-scoped key a response hands out next to its
+// tf_admin cookie; the gate wants both.
+func adminKey(rec *httptest.ResponseRecorder) string {
+	return bodyAdminKey(rec.Body.String())
+}
+
 func setPIN(t *testing.T, a *Actions, pin string) {
 	t.Helper()
 	// first-run bootstrap: no PIN yet, so the POST is open
@@ -110,8 +116,16 @@ func TestCookieCarriesSessionNotPIN(t *testing.T) {
 	// the session passes the gate...
 	req := httptest.NewRequest(http.MethodPost, "/conf/x", nil)
 	req.AddCookie(c)
+	req.Header.Set("X-Admin-Key", adminKey(rec))
 	if !a.requirePrivileged(httptest.NewRecorder(), req) {
 		t.Fatal("valid session rejected")
+	}
+	// ...but not on the cookie alone: the browser also sends it to forwarded
+	// services on other ports of the same host
+	req = httptest.NewRequest(http.MethodPost, "/conf/x", nil)
+	req.AddCookie(c)
+	if a.requirePrivileged(httptest.NewRecorder(), req) {
+		t.Fatal("cookie accepted without its origin-scoped key")
 	}
 	// ...but the PIN itself in the cookie (the old behaviour) does not
 	req = httptest.NewRequest(http.MethodPost, "/conf/x", nil)
@@ -124,17 +138,19 @@ func TestCookieCarriesSessionNotPIN(t *testing.T) {
 func TestSessionExpiresAndPINChangeRevokes(t *testing.T) {
 	a, clock := newTestActions(t)
 	setPIN(t, a, "first-pin")
-	c := adminCookie(postJSON(a.handleAdminUnlock, "/admin/unlock", `{"pin":"first-pin"}`, nil))
+	unlock := postJSON(a.handleAdminUnlock, "/admin/unlock", `{"pin":"first-pin"}`, nil)
+	c, key := adminCookie(unlock), adminKey(unlock)
 	check := func() bool {
 		req := httptest.NewRequest(http.MethodPost, "/conf/x", nil)
 		req.AddCookie(c)
+		req.Header.Set("X-Admin-Key", key)
 		return a.requirePrivileged(httptest.NewRecorder(), req)
 	}
 	if !check() {
 		t.Fatal("fresh session rejected")
 	}
 	// rotating the PIN (authorised by the session) revokes old sessions
-	rec := postJSON(a.handleSettings, "/settings", `{"adminPin":"second-pin"}`, nil, c)
+	rec := postJSON(a.handleSettings, "/settings", `{"adminPin":"second-pin"}`, map[string]string{"X-Admin-Key": key}, c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rotate pin: %d %s", rec.Code, rec.Body.String())
 	}
@@ -145,9 +161,12 @@ func TestSessionExpiresAndPINChangeRevokes(t *testing.T) {
 	if fresh == nil {
 		t.Fatal("PIN change should hand the caller a new session")
 	}
+	c, key = fresh, adminKey(rec)
+	if !check() {
+		t.Fatal("the session handed out by the PIN change is rejected")
+	}
 	// expiry
 	*clock = clock.Add(sessionTTL + time.Minute)
-	c = fresh
 	if check() {
 		t.Fatal("expired session accepted")
 	}

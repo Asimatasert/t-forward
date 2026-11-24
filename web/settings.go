@@ -172,11 +172,13 @@ func (a *Actions) saveSettings(s Settings) error {
 // it, or a 503 when settings.json exists but cannot be read or parsed (fail
 // closed: an unknown PIN state is not "no PIN", and not even a live session
 // passes). While no admin PIN is set (first run: no settings.json, or one
-// without a hash) everything is open so the PIN can be
-// established; once set, a session token (tf_admin cookie or X-Admin-Token
-// header, minted by /admin/unlock) is required. API clients may also send the
-// PIN itself in X-Admin-Token; that path is subject to the same lockout as
-// /admin/unlock. The cookie only ever carries a session token, never the PIN.
+// without a hash) everything is open so the PIN can be established; once set, a
+// session minted by /admin/unlock is required: the tf_admin cookie together
+// with its X-Admin-Key header. The cookie alone does not pass (the browser also
+// sends it to forwarded services on other ports of this host), and for the same
+// reason its value is not accepted as a header. API clients send the PIN itself
+// in X-Admin-Token; that path is subject to the same lockout as /admin/unlock.
+// The cookie only ever carries a session token, never the PIN.
 func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool {
 	s, err := a.readSettings()
 	if err != nil {
@@ -187,9 +189,6 @@ func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool
 		return true // first-run bootstrap
 	}
 	if hdr := r.Header.Get("X-Admin-Token"); hdr != "" {
-		if a.gate.validSession(hdr) {
-			return true
-		}
 		ok, retry, err := a.checkPIN(hdr)
 		if err != nil {
 			settingsUnavailable(w)
@@ -202,7 +201,7 @@ func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool
 			lockedResponse(w, retry)
 			return false
 		}
-	} else if c, err := r.Cookie("tf_admin"); err == nil && a.gate.validSession(c.Value) {
+	} else if c, err := r.Cookie("tf_admin"); err == nil && a.gate.validSessionKey(c.Value, r.Header.Get("X-Admin-Key")) {
 		return true
 	}
 	writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "locked", "needPin": true})
@@ -314,13 +313,14 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
+		out := map[string]any{"ok": true}
 		if newPin {
 			// the PIN changed: every old session dies, the caller (who just
 			// proved they may change it) gets a fresh one
 			a.gate.revokeAll()
-			setAdminCookie(w, a.gate.newSession())
+			out["adminKey"] = a.startAdminSession(w)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, out)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -328,7 +328,8 @@ func (a *Actions) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminUnlock: POST {pin} — verify the PIN (with lockout after repeated
 // failures) and set a short-lived tf_admin cookie holding a random session
-// token, so subsequent privileged requests pass the gate.
+// token; the response carries the session's adminKey, and subsequent privileged
+// requests pass the gate with the cookie plus that key in X-Admin-Key.
 func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -358,8 +359,7 @@ func (a *Actions) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok {
-		setAdminCookie(w, a.gate.newSession())
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "adminKey": a.startAdminSession(w)})
 		return
 	}
 	writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "wrong pin"})
