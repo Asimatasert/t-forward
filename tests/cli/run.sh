@@ -785,9 +785,43 @@ begin "image refresh: unlabeled local build whose repo digest names only the loc
 TF_ENV=(FAKE_DOCKER_IMG_DIGESTS=t-forward@sha256:0123)
 tf "${ADHOC_LOCAL[@]}"; rc 0
 out_has "out of date"; has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"
-begin "image refresh: unlabeled pulled image (has a repo digest) is left alone"
+begin "image refresh: unlabeled pulled image of this version (same ID as the published tag) is left alone"
 tf "${ADHOC_LOCAL[@]}"; rc 0
-out_lacks "out of date"; no_call build
+out_lacks "another version"; out_lacks "out of date"; no_call pull; no_call tag; no_call build
+begin "image refresh: pulled image of an older version -> message, pull, re-tag"
+TF_ENV=(FAKE_DOCKER_HUB_MISSING=1)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "Image t-forward:latest belongs to another version than $VERSION; pulling asimatasert/t-forward:$VERSION."
+out_has "Running tunnels keep the old image until restarted"
+has_call pull asimatasert/t-forward:"$VERSION"; has_call tag asimatasert/t-forward:"$VERSION" t-forward:latest
+no_call build; has_call run
+begin "image refresh: published tag exists but is a different image -> pull and re-tag"
+TF_ENV=(FAKE_DOCKER_HUB_ID=sha256:bbb)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "belongs to another version"; has_call pull asimatasert/t-forward:"$VERSION"; has_call tag asimatasert/t-forward:"$VERSION" t-forward:latest
+begin "image refresh: older version, pull fails, no build files -> warning, tunnel still starts"
+mkdir -p "$SB/lonely"; cp "$TF" "$SB/lonely/t-forward"
+TF_ENV=(FAKE_DOCKER_HUB_MISSING=1 FAKE_DOCKER_PULL_FAIL=1)
+TF=$SB/lonely/t-forward tf "${ADHOC_LOCAL[@]}"; rc 0
+err_has "pull failed; continuing with the existing t-forward:latest"
+no_call build; no_call tag; has_call run
+begin "image refresh: older version, pull fails, build files present -> labelled local build"
+TF_ENV=(FAKE_DOCKER_HUB_MISSING=1 FAKE_DOCKER_PULL_FAIL=1)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "pull failed; building locally..."
+has_call build --label "t-forward.src-hash=$WANT" -t t-forward:latest "$ROOT"; has_call run
+begin "image refresh: older version, pull and build both fail -> warning, tunnel still starts"
+TF_ENV=(FAKE_DOCKER_HUB_MISSING=1 FAKE_DOCKER_PULL_FAIL=1 FAKE_DOCKER_BUILD_FAIL=1)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+err_has "build failed; continuing with the existing t-forward:latest"; has_call run
+begin "image refresh: pulled image under a custom T_FORWARD_IMAGE name follows the same rules"
+TF_ENV=(T_FORWARD_IMAGE=my/image:dev FAKE_DOCKER_HUB_MISSING=1)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+out_has "Image my/image:dev belongs to another version"; has_call tag asimatasert/t-forward:"$VERSION" my/image:dev
+begin "image refresh: empty T_FORWARD_HUB_IMAGE never pulls an existing image"
+TF_ENV=(T_FORWARD_HUB_IMAGE= FAKE_DOCKER_HUB_MISSING=1 FAKE_DOCKER_IMG_DIGESTS=)
+tf "${ADHOC_LOCAL[@]}"; rc 0
+no_call pull
 begin "image refresh: failed rebuild warns and still starts with the old image"
 TF_ENV=(FAKE_DOCKER_IMG_HASH=0000stale FAKE_DOCKER_BUILD_FAIL=1)
 tf "${ADHOC_LOCAL[@]}"; rc 0

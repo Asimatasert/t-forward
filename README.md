@@ -105,11 +105,22 @@ nothing changed there is no rebuild and no extra delay. Notes:
 - Tunnels that are already running keep using the old image until you restart
   them (`t-forward down NAME`, then `up`).
 - An image without the label that was built locally before this check existed
-  is treated as stale and rebuilt once. An image pulled from the registry is
-  never rebuilt automatically (re-pull it, or run `t-forward build`).
-- If the rebuild fails (for example offline), the CLI warns and starts with the
-  existing image; `t-forward build` forces a rebuild at any time.
-- Nothing is pulled or pushed by this check; the build is local only.
+  is treated as stale and rebuilt once.
+- An image that was pulled from the registry (the default install) is current
+  only while it is the same image as the local `asimatasert/t-forward:<CLI
+  version>`; the check is two local `docker image inspect` calls, no network.
+  After a CLI update to a newer version the old image is stale: the CLI prints
+  one line (`Image ... belongs to another version ...`), pulls the new version
+  and re-tags it. If the pull fails it builds locally when the repo files are
+  next to the script, otherwise it warns and keeps the existing image.
+- A failed refresh never blocks starting a tunnel: the CLI warns and starts with
+  the existing image. `t-forward build` forces a local rebuild at any time.
+- A custom `T_FORWARD_IMAGE` name follows the same rules: the CLI only ever
+  creates that image itself (by `build` or by tagging the pulled image), so an
+  unlabeled one is an old build or a pulled image and is refreshed as above.
+  With `T_FORWARD_HUB_IMAGE=""` nothing is ever pulled.
+- The only network access of this check is that `docker pull` of the published
+  image; nothing is pushed.
 
 ## Configure
 
@@ -471,7 +482,7 @@ The CLI version is unchanged, so old and new CLI/image can be mixed:
   is updated.
 
 Update the CLI; a locally built image is then rebuilt automatically on the next `up`
-(`t-forward build` does it explicitly; a pulled image needs a re-pull).
+(`t-forward build` does it explicitly; a pulled image is re-pulled for the new version).
 
 ## Security notes
 
