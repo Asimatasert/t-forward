@@ -358,7 +358,9 @@ through the tunnel, and the container's network namespace routes packets
 tunnel starts:
 
 - replies to connections the container opened itself are accepted (connection
-  tracking), so the tunnel's own traffic is not affected;
+  tracking), together with the ICMP errors related to them (path-MTU discovery,
+  unreachables), so the tunnel's own traffic is not affected; no other kind of
+  related packet is accepted from the tunnel side;
 - anything else addressed to the `eth0` address is dropped unless it came in on
   `eth0` (for IPsec, which has no tunnel interface: unless it came in outside
   the IPsec tunnel);
@@ -367,7 +369,10 @@ tunnel starts:
 
 The far side of a tunnel can therefore neither open a connection to a forward or
 the SOCKS proxy nor send packets through the container. If the filter cannot be
-loaded the container refuses to start (see [Requirements](#requirements)). The
+loaded the container refuses to start (see [Requirements](#requirements)). A host
+whose kernel cannot load the filter therefore cannot run `vpn` tunnels at all,
+and there is deliberately no option to run without it; `ssh` and `local` tunnels
+are not affected. The
 filter ships in the image: after updating, re-pull it or run `t-forward build` -
 an older local image keeps running without it. The
 host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)
@@ -468,6 +473,15 @@ Update the CLI and run `t-forward build` together.
   `--totp-secret-file PATH`, or keep them in the (mode `600`) config.
 - Configs hold plaintext credentials; they are kept at mode `600` and the
   `.gitignore` excludes real config directories. Keep them out of version control.
+- **Credentials inside the container.** The mounted auth dir files (`password`,
+  `psk`, `totp_secret`, `ssh_key`, `code`) are removed as soon as they are
+  consumed and again on every exit path (failed start, `docker stop`, tunnel
+  ended), unless a restart policy (`--restart`) needs them to reconnect. For
+  `protocol: ipsec` strongSwan reads its credentials from `/etc/ipsec.secrets`
+  inside the container (mode `0600`, root only; the PSK and the XAuth
+  password). That file has to exist while the tunnel runs, so it stays until the
+  container process ends and is then removed; it is rewritten on every start. A
+  TOTP seed is handed to the code generator on stdin, never on a command line.
 - Panel config edits are whitelisted and injection-safe, and never modify the
   password / servercert / totp_secret / ssh key.
 - The admin PIN (settings / config writes) must be at least 6 characters. It is

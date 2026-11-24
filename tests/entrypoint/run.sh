@@ -468,7 +468,7 @@ E TUNNEL_TYPE=vpn VPN_PROTOCOL=ipsec "VPN_SERVER=$server" "VPN_USER=$user" "IKE_
 authf password "$pass"; authf psk "$psk"
 up_and_down 0
 rc 0; argv ipsec 1 start --nofork
-conf=$SB/etc/ipsec.conf; sec=$SB/etc/ipsec.secrets
+conf=$SB/etc/ipsec.conf; sec=$SB/state/ipsec.secrets.seen
 file_has "$conf" "    keyexchange=ikev$ikev"; file_has "$conf" "    right=$server"; file_has "$conf" "    xauth_identity=$user"
 file_has "$conf" "    ike=${ikep:-aes256-sha256-modp2048,aes128-sha256-modp2048}!"
 file_has "$conf" "    esp=${espp:-aes256-sha256-modp1536,aes128-sha256-modp1536}!"
@@ -580,11 +580,11 @@ check "nft ran before openconnect" test "$(call_file nft 1)" '<' "$(call_file op
 R="$SB/state/nft.rules"
 file_has "$R" "        type filter hook input priority 0; policy accept;"
 file_has "$R" "        ct state established ct direction reply accept"
-file_has "$R" "        ct state related accept"
+file_has "$R" "        ct state related meta l4proto icmp accept"; file_lacks "$R" "ct state related accept"
 file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
 file_has "$R" "        type filter hook forward priority 0; policy drop;"
 check "return traffic is accepted before anything is dropped" \
-    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+    test "$(grep -n 'ct state related meta l4proto icmp accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
 file_lacks "$R" "ipsec"   # openconnect must not depend on the kernel's IPsec match
 out_has "[t-forward] tunnel filter installed: $ETH accepts new connections arriving on eth0 only; nothing is forwarded"
 
@@ -728,7 +728,7 @@ cfg_ipsec; E FORWARDS= SOCKS=false
 up_and_down 5
 rc 5; ended
 argv ipsec 1 start --nofork
-conf=$SB/etc/ipsec.conf; sec=$SB/etc/ipsec.secrets
+conf=$SB/etc/ipsec.conf; sec=$SB/state/ipsec.secrets.seen
 file_has "$conf" "conn tforward"; file_has "$conf" "    keyexchange=ikev1"; file_has "$conf" "    aggressive=yes"
 file_has "$conf" "    authby=xauthpsk"; file_has "$conf" "    xauth=client"; file_has "$conf" "    right=203.0.113.10"
 file_has "$conf" "    xauth_identity=you@example.com"
@@ -762,12 +762,12 @@ rc 0; argv_any socat -d -d "TCP-LISTEN:2222,bind=$ETH,fork,reuseaddr" TCP:10.0.0
 argv nft 1 -f -; check "nft ran before charon" test "$(call_file nft 1)" '<' "$(call_file ipsec 1)"
 R="$SB/state/nft.rules"
 file_has "$R" "        ct state established ct direction reply accept"
-file_has "$R" "        ct state related accept"
+file_has "$R" "        ct state related meta l4proto icmp accept"; file_lacks "$R" "ct state related accept"
 file_has "$R" "        iifname != { \"eth0\", \"lo\" } ip daddr $ETH drop"
 file_has "$R" "        meta ipsec exists ip daddr $ETH drop"
 file_has "$R" "        type filter hook forward priority 0; policy drop;"
 check "return traffic is accepted before anything is dropped" \
-    test "$(grep -n 'ct state related accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
+    test "$(grep -n 'ct state related meta l4proto icmp accept' "$R" | cut -d: -f1)" -lt "$(grep -n ' drop$' "$R" | head -n 1 | cut -d: -f1)"
 
 begin "ipsec: the filter cannot be installed -> refuses to start, nothing is exposed"
 cfg_ipsec; E "FORWARDS=2222|10.0.0.20|22;" SOCKS=true FAKE_NFT_FAIL=1; run_ep
@@ -777,17 +777,17 @@ calls_are ipsec 0; calls_are socat 0; calls_are microsocks 0; absent "$SB/auth/r
 begin "ipsec: KEEP_AUTH=true keeps psk and password in /auth (secrets still written)"
 cfg_ipsec; E KEEP_AUTH=true
 up_and_down 0
-exists "$SB/auth/psk"; exists "$SB/auth/password"; exists "$SB/etc/ipsec.secrets"
+exists "$SB/auth/psk"; exists "$SB/auth/password"; exists "$SB/state/ipsec.secrets.seen"
 
 begin "ipsec: a PSK with a double quote is written single-quoted"
 cfg_ipsec; authf psk 'pa"ss'
 up_and_down 0
-file_has "$SB/etc/ipsec.secrets" ": PSK 'pa\"ss'"
+file_has "$SB/state/ipsec.secrets.seen" ": PSK 'pa\"ss'"
 
 begin "ipsec: manual TOTP - the code is appended to the XAuth password"
 cfg_ipsec; E TOTP=true
 up_and_down 0
-rc 0; file_has "$SB/etc/ipsec.secrets" 'you@example.com : XAUTH "xauth-pass123456"'
+rc 0; file_has "$SB/state/ipsec.secrets.seen" 'you@example.com : XAUTH "xauth-pass123456"'
 out_has "XAuth password set; waiting for verification code from the host"; out_has "verification code appended to XAuth password"
 absent "$SB/auth/code"; absent "$SB/auth/awaiting_code"
 
@@ -799,9 +799,59 @@ rc 1; out_has "ERROR: no verification code within 2s; aborting"; calls_are ipsec
 begin "ipsec: a totp_secret generates the code locally (base32: prefix stripped)"
 cfg_ipsec; authf totp_secret base32:JBSWY3DPEHPK3PXP
 up_and_down 0
-rc 0; argv oathtool 1 --totp -b JBSWY3DPEHPK3PXP
-file_has "$SB/etc/ipsec.secrets" 'you@example.com : XAUTH "xauth-pass654321"'
+rc 0; argv oathtool 1 --totp -b -
+lacks_arg oathtool 1 JBSWY3DPEHPK3PXP; file_is "$SB/state/oathtool.stdin" JBSWY3DPEHPK3PXP
+absent "$SB/auth/totp_secret"
+file_has "$SB/state/ipsec.secrets.seen" 'you@example.com : XAUTH "xauth-pass654321"'
 out_has "generated TOTP appended to XAuth password"
+
+# secrets must not outlive the process, whichever way it ends
+begin "ipsec: ipsec.secrets is removed when the tunnel ends (and was 600 while it ran)"
+cfg_ipsec
+up_and_down 0
+rc 0; mode_is "$SB/state/ipsec.secrets.seen" 600; absent "$SB/etc/ipsec.secrets"
+absent "$SB/auth/psk"; absent "$SB/auth/password"
+
+begin "ipsec: KEEP_AUTH=true still removes ipsec.secrets at exit (rewritten on the next start)"
+cfg_ipsec; E KEEP_AUTH=true
+up_and_down 0
+rc 0; absent "$SB/etc/ipsec.secrets"; exists "$SB/auth/psk"; exists "$SB/auth/password"
+
+begin "ipsec: TERM removes ipsec.secrets and the credential files"
+cfg_ipsec; authf totp_secret base32:JBSWY3DPEHPK3PXP
+start_ep
+check "tunnel comes up (ready marker)" await_ready
+kill -TERM "$EP_PID"; finish_ep
+rc 143; absent "$SB/etc/ipsec.secrets"; absent "$SB/auth/psk"; absent "$SB/auth/password"; absent "$SB/auth/totp_secret"
+
+begin "ipsec: a failed start leaves no ipsec.secrets, psk or password behind"
+cfg_ipsec; E FAKE_IPSEC_MODE=xauth
+run_ep
+rc 1; out_has "the VPN rejected the credentials (XAuth/PSK)"
+absent "$SB/etc/ipsec.secrets"; absent "$SB/auth/psk"; absent "$SB/auth/password"
+
+begin "ipsec: a refused value leaves psk and password in /auth removed too"
+cfg_ipsec; E VPN_SERVER='203.0.113.10 bad'; run_ep
+rc 1; absent "$SB/etc/ipsec.secrets"; absent "$SB/auth/psk"; absent "$SB/auth/password"
+
+begin "ipsec: manual TOTP wait - password and psk are not on disk while waiting for the code"
+cfg_ipsec; E TOTP=true
+start_ep
+check "the entrypoint asks for the code" await_file "$SB/auth/awaiting_code"
+absent "$SB/auth/password"; absent "$SB/auth/psk"
+printf '123456' >"$SB/auth/code"
+check "tunnel comes up (ready marker)" await_ready
+stop_tunnel 0; finish_ep
+
+begin "openconnect: a failed start (rejected credentials) removes password and totp_secret"
+cfg_oc; E FAKE_OC_MODE=reject; authf totp_secret base32:JBSWY3DPEHPK3PXP
+run_ep
+rc 1; absent "$SB/auth/password"; absent "$SB/auth/totp_secret"
+
+begin "ssh: a failed start removes the password and the private key copy"
+cfg_ssh; E FAKE_SSH_MODE=denied FORWARDS='2222|10.0.0.40|22;'
+run_ep
+rc 1; absent "$SB/auth/password"; absent "$SB/auth/ssh_key"; absent "$SB/home/.tforward/ssh_key"
 
 # every value interpolated into ipsec.conf / ipsec.secrets is validated first:
 # a line break there would add a directive of its own (leftupdown= runs a command)
@@ -1045,7 +1095,7 @@ up_and_down 1
 rc 1; exists "$SB/auth/psk"
 reset_state
 up_and_down 0
-rc 0; file_has "$SB/etc/ipsec.secrets" ': PSK "the-pre-shared-key"'
+rc 0; file_has "$SB/state/ipsec.secrets.seen" ': PSK "the-pre-shared-key"'
 
 begin "restart: ssh KEEP_AUTH=true starts again from the kept key"
 cfg_ssh; E KEEP_AUTH=true "FORWARDS=2222|10.0.0.40|22;"

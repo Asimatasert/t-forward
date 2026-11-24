@@ -27,7 +27,11 @@ case "${1:-}" in
             echo "Security Associations (0 up, 1 connecting):"
         fi
         exit 0 ;;
-    start) record ipsec "$@" ;;
+    start)
+        record ipsec "$@"
+        # what strongSwan would read at start: keep a copy (with its mode) of
+        # ipsec.secrets, which the entrypoint removes when it ends
+        [ ! -e "$FS/../etc/ipsec.secrets" ] || cp -p "$FS/../etc/ipsec.secrets" "$FS/ipsec.secrets.seen" ;;
     *) echo "fake ipsec: unsupported: $*" >&2; exit 2 ;;
 esac
 
