@@ -164,6 +164,9 @@ func main() {
 	// and browser-reported cross-site requests, so a malicious web page the operator
 	// visits cannot drive this loopback daemon.
 	handler = guardMiddleware(hostOnly(*addr), splitComma(*allowedHosts), handler)
+	// Anti-framing headers on every response, including the 401/403/415 written
+	// by the two middlewares above.
+	handler = securityHeaders(handler)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -308,6 +311,23 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 	})
 }
 
+// securityHeaders forbids embedding any response of the daemon in a frame, so a
+// hostile page cannot overlay the live panel and harvest clicks on its one-click
+// actions (clickjacking). X-Frame-Options covers older browsers, the CSP
+// frame-ancestors directive is its modern replacement; nosniff stops a browser
+// from reinterpreting a JSON/text response as script or HTML. The CSP carries
+// no other directive on purpose: the panel relies on inline script and inline
+// event handlers, which a script policy would break.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // guardMiddleware defends the loopback daemon against being driven by a web page
 // the operator happens to visit. Two checks, both browser-supplied:
 //
@@ -317,8 +337,14 @@ func tokenMiddleware(want string, next http.Handler) http.Handler {
 //     is exempt, so the operator can still click the /?token= link from anywhere
 //     (a chat app, the terminal); a cross-site navigation with an unsafe method
 //     (a forged <form method=POST> submit) is NOT exempt — that is the CSRF
-//     vector. Non-browser clients (curl) omit the header and pass through (they
-//     still face the token check).
+//     vector. Nor is a navigation whose Sec-Fetch-Dest is anything but
+//     "document": an <iframe>/<frame>/<embed>/<object> load is also mode
+//     "navigate", and letting it through would let a hostile page frame the
+//     panel (clickjacking). An absent Sec-Fetch-Dest is treated like every other
+//     absent Sec-Fetch header — as an older browser — and passes; those browsers
+//     are covered by the X-Frame-Options header (see securityHeaders).
+//     Non-browser clients (curl) omit the header and pass through (they still
+//     face the token check).
 //   - Content-Type on state-changing methods: a browser <form> can only send
 //     text/plain, urlencoded, or multipart — never application/json — so
 //     requiring JSON on POST/PUT/DELETE blocks a forged cross-site form even on
@@ -343,8 +369,10 @@ func guardMiddleware(bindHost string, extra []string, next http.Handler) http.Ha
 		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 			// exempt ONLY a safe-method top-level navigation (clicking the
 			// /?token= link); a cross-site POST/etc — scripted or a forged
-			// form submit — is always blocked.
-			navOK := safeMethod && r.Header.Get("Sec-Fetch-Mode") == "navigate"
+			// form submit — is always blocked, and so is a navigation inside
+			// a frame/embed/object (dest absent = pre-Sec-Fetch-Dest browser).
+			dest := r.Header.Get("Sec-Fetch-Dest")
+			navOK := safeMethod && r.Header.Get("Sec-Fetch-Mode") == "navigate" && (dest == "" || dest == "document")
 			if !navOK {
 				http.Error(w, "cross-site request blocked", http.StatusForbidden)
 				return

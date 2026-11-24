@@ -472,6 +472,18 @@ func TestGuardMiddleware(t *testing.T) {
 		{"cross-site POST navigation blocked", "127.0.0.1", nil, "POST", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Content-Type": "application/json"}, 403},
 		{"cross-site POST json fetch blocked", "127.0.0.1", nil, "POST", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"}, 403},
 		{"same-site (not cross-site) GET", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "same-site"}, 418},
+		// Sec-Fetch-Dest (clickjacking): only a top-level document may take the navigation exemption
+		{"cross-site document navigation allowed", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}, 418},
+		{"cross-site HEAD document navigation allowed", "127.0.0.1", nil, "HEAD", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}, 418},
+		{"cross-site iframe navigation blocked", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}, 403},
+		{"cross-site frame navigation blocked", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "frame"}, 403},
+		{"cross-site embed navigation blocked", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "embed"}, 403},
+		{"cross-site object navigation blocked", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "object"}, 403},
+		{"cross-site HEAD iframe navigation blocked", "127.0.0.1", nil, "HEAD", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}, 403},
+		{"cross-site unknown destination blocked", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "fencedframe"}, 403},
+		{"same-origin iframe navigation unaffected", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}, 418},
+		{"same-origin fetch with empty destination unaffected", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}, 418},
+		{"no Sec-Fetch headers but a destination (non-browser)", "127.0.0.1", nil, "GET", "localhost", map[string]string{"Sec-Fetch-Dest": "iframe"}, 418},
 		// Content-Type on state-changing methods
 		{"POST json", "127.0.0.1", nil, "POST", "localhost", map[string]string{"Content-Type": "application/json"}, 418},
 		{"POST json with charset", "127.0.0.1", nil, "POST", "localhost", map[string]string{"Content-Type": "application/json; charset=utf-8"}, 418},
@@ -505,6 +517,57 @@ func TestGuardMiddleware(t *testing.T) {
 			h.ServeHTTP(rec, req)
 			if rec.Code != c.want {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, c.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// securityHeaders is the outermost wrapper, so the anti-framing headers must be
+// on responses written by the guard and the token check as well as on the
+// handler's own, and must not be duplicated when a handler sets one itself
+// (http.Error sets nosniff).
+func TestSecurityHeaders(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusTeapot)
+	})
+	chain := securityHeaders(guardMiddleware("127.0.0.1", nil, tokenMiddleware("tok", inner)))
+	cases := []struct {
+		name   string
+		path   string
+		host   string
+		header map[string]string
+		want   int
+	}{
+		{"handler response", "/state", "localhost", map[string]string{"X-Token": "tok"}, 418},
+		{"handler error", "/missing", "localhost", map[string]string{"X-Token": "tok"}, 404},
+		{"token check 401", "/state", "localhost", nil, 401},
+		{"guard host 403", "/state", "evil.example.com", map[string]string{"X-Token": "tok"}, 403},
+		{"guard framed navigation 403", "/", "localhost", map[string]string{"X-Token": "tok", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}, 403},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, c.path, nil)
+			req.Host = c.host
+			for k, v := range c.header {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			chain.ServeHTTP(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d", rec.Code, c.want)
+			}
+			for k, v := range map[string]string{
+				"X-Frame-Options":         "DENY",
+				"Content-Security-Policy": "frame-ancestors 'none'",
+				"X-Content-Type-Options":  "nosniff",
+			} {
+				if got := rec.Header().Values(k); len(got) != 1 || got[0] != v {
+					t.Errorf("%s = %q, want exactly %q", k, got, v)
+				}
 			}
 		})
 	}
@@ -1115,6 +1178,75 @@ func TestMainAuthAndGuardOverHTTP(t *testing.T) {
 			t.Errorf("form POST = %d, want 415", r.code)
 		}
 	})
+}
+
+// The panel must not be embeddable: every response carries the anti-framing
+// headers (whichever middleware or handler produced it, in both auth modes) and
+// a cross-site navigation is only let through for a top-level document.
+func TestMainFrameProtection(t *testing.T) {
+	modes := []struct {
+		name string
+		opts startOpts
+	}{
+		{"token", startOpts{token: "frame-token-0123456789"}},
+		{"no-auth", startOpts{args: []string{"-no-auth"}}},
+	}
+	for _, m := range modes {
+		t.Run(m.name, func(t *testing.T) {
+			o := m.opts
+			o.cfgDir = t.TempDir()
+			d := startDaemon(t, o)
+
+			nav := func(dest string) map[string]string {
+				return map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest}
+			}
+			type frameCase struct {
+				name   string
+				method string
+				path   string
+				body   string
+				hdr    map[string]string
+				want   int
+			}
+			cases := []frameCase{
+				{"panel", "GET", "/", "", nil, 200},
+				{"panel HEAD", "HEAD", "/", "", nil, 200},
+				{"api route", "GET", "/state", "", nil, 200},
+				{"healthz", "GET", "/healthz", "", nil, 200},
+				{"unknown path", "GET", "/nope", "", nil, 404},
+				{"method not allowed", "POST", "/version", "{}", nil, 405},
+				{"rebinding host", "GET", "/", "", map[string]string{"Host": "evil.example.com"}, 403},
+				{"non-json POST", "POST", "/up", "name=x", map[string]string{"Content-Type": "text/plain"}, 415},
+				{"same-origin fetch", "GET", "/state", "", map[string]string{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}, 200},
+				{"same-origin navigation", "GET", "/", "", map[string]string{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}, 200},
+				{"cross-site document navigation", "GET", "/", "", nav("document"), 200},
+				{"cross-site navigation without a destination", "GET", "/", "", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}, 200},
+				{"cross-site iframe", "GET", "/", "", nav("iframe"), 403},
+				{"cross-site frame", "GET", "/", "", nav("frame"), 403},
+				{"cross-site embed", "GET", "/", "", nav("embed"), 403},
+				{"cross-site object", "GET", "/", "", nav("object"), 403},
+			}
+			if d.token != "" {
+				cases = append(cases, frameCase{"unauthorized", "GET", "/", "", map[string]string{"Authorization": "-"}, 401})
+			}
+			wantHdr := map[string]string{
+				"X-Frame-Options":         "DENY",
+				"Content-Security-Policy": "frame-ancestors 'none'",
+				"X-Content-Type-Options":  "nosniff",
+			}
+			for _, c := range cases {
+				r := d.req(c.method, c.path, c.body, c.hdr)
+				if r.code != c.want {
+					t.Errorf("%s: %s %s -> %d, want %d", c.name, c.method, c.path, r.code, c.want)
+				}
+				for k, v := range wantHdr {
+					if got := r.hdr.Values(k); len(got) != 1 || got[0] != v {
+						t.Errorf("%s: %s %s (%d) %s = %q, want exactly %q", c.name, c.method, c.path, r.code, k, got, v)
+					}
+				}
+			}
+		})
+	}
 }
 
 func listenPortOf(addr string) string {
