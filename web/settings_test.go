@@ -544,7 +544,7 @@ func TestSettingsPinHeaderLockout(t *testing.T) {
 	e.writeSettings(t, Settings{AdminSecretHash: hashPIN("correct-pin")})
 
 	for i := 0; i < lockAfterFail; i++ {
-		if rec := e.postSettings(`{}`, map[string]string{"X-Admin-Token": "wrong"}); rec.Code != http.StatusForbidden {
+		if rec := e.postSettings(`{}`, map[string]string{"X-Admin-Token": "wrong-pin"}); rec.Code != http.StatusForbidden {
 			t.Fatalf("attempt %d: status = %d, want 403", i+1, rec.Code)
 		}
 	}

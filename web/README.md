@@ -42,7 +42,14 @@ Consequences:
   panel tab left open across the upgrade, must open the `/?token=` link once.
 - API clients are unaffected: send the token in `Authorization: Bearer` /
   `X-Token`, and the admin PIN in `X-Admin-Token`. The `tf_admin` cookie value
-  is no longer accepted as `X-Admin-Token`.
+  is no longer accepted as `X-Admin-Token`. A value there that cannot be the PIN
+  (shorter than 6 characters, or a live session token) is refused without
+  counting towards the PIN lockout; any other wrong value still counts.
+- Replacing an existing admin PIN needs `currentPin` in the `POST /settings`
+  body (the panel asks for it); setting the first PIN does not. PIN lockouts
+  are tracked per client address (peer address only, no forwarded-for
+  headers) with a global ceiling; behind a reverse proxy all callers share one
+  counter.
 - Sessions survive a daemon restart only with a fixed token (`TF_WEB_TOKEN` or
   `--token-file`): they are bound to the token and to a random secret stored in
   `<config-dir>/web-session.key` (mode `600`). A token generated at startup is

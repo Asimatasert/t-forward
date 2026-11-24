@@ -189,6 +189,13 @@ func (a *Actions) requirePrivileged(w http.ResponseWriter, r *http.Request) bool
 		return true // first-run bootstrap
 	}
 	if hdr := r.Header.Get("X-Admin-Token"); hdr != "" {
+		// A value that cannot be the PIN (too short, or a live session token
+		// replayed from the cookie) is refused without being evaluated and
+		// without counting towards the lockout: it is not a guess.
+		if !validPINLength(hdr) || a.gate.validSession(hdr) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "locked", "needPin": true})
+			return false
+		}
 		ok, retry, err := a.checkPIN(hdr, clientKey(r))
 		if err != nil {
 			settingsUnavailable(w)
