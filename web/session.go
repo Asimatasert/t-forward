@@ -27,7 +27,7 @@ import (
 //
 // Both halves are required on every request. Nothing is stored server-side: the
 // MAC keys derive from a random secret persisted beside the config (so an open
-// panel survives a daemon restart) mixed with the token (so rotating the token
+// panel survives a restart that keeps the same token) mixed with the token (so rotating the token
 // revokes every session). The secret is independent of the token, so a leaked
 // cookie gives no offline oracle for guessing a weak token.
 //

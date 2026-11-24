@@ -482,7 +482,11 @@ Update the CLI and run `t-forward build` together.
   origin storage and sent as a request header. Cookies are scoped by host, not
   by port, so the browser also sends the daemon's cookies to every forwarded
   HTTP service you open on the same hostname; a cookie alone therefore
-  authenticates nothing, and no cookie carries the daemon token. The key is
+  cannot call the API or start a session (it only gets the static panel page
+  from `GET /`, without key or data), and no cookie carries the daemon token.
+  Sessions survive a daemon restart only with a fixed token (`TF_WEB_TOKEN` or
+  `--token-file`); a token generated at startup signs every browser out when
+  the daemon restarts. The key is
   readable by script in the panel origin, and key plus cookie replayed outside
   the browser is a valid session that does not expire until the token is
   rotated. See [web/README.md](web/README.md).
