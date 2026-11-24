@@ -25,8 +25,10 @@ FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5
 
 # openconnect -> SSL-VPN (fortinet/gp/anyconnect/...); strongswan -> IPsec/IKE
 # (FortiGate dialup: PSK + XAuth), the two families most hospital gateways speak.
+# nftables -> the entrypoint's filter that keeps the far side of a vpn tunnel
+# away from the forwards / SOCKS proxy.
 RUN apk add --no-cache bash openconnect socat iproute2 openssh-client sshpass \
-    strongswan oath-toolkit-oathtool
+    strongswan oath-toolkit-oathtool nftables
 
 # Unprivileged runtime user with a fixed UID/GID, so bind-mount ownership is
 # predictable. The image defaults to it (USER below); only the vpn tunnel type

@@ -43,8 +43,10 @@ you, for free:
 - **No route conflicts** — two VPNs pushing overlapping `10.x` subnets simply
   cannot collide; every tunnel lives in its own network namespace.
 - **No cross-tunnel reachability** — one tunnel's container (and its remote side)
-  can never reach another's. Listeners bind to the Docker side only, so nothing
-  on the far side of a tunnel can reach them.
+  can never reach another's. Listeners bind to the Docker side only, and a `vpn`
+  container refuses connections that the far side of the tunnel opens to that
+  address and forwards nothing, so the far side can reach neither the listeners
+  nor your Docker-side network.
 - **Host DNS untouched** — a VPN's DNS applies only inside its container (forward
   targets resolve through it), so Tailscale / mDNS / your resolver never break.
 - **No sudo on the host** — only `vpn` tunnels get root, and only inside the
@@ -77,7 +79,8 @@ Access goes through **published port forwards** and an optional per-tunnel
 |---|---|
 | Host | `bash` ≥ 3.2, `docker` (Docker Desktop / OrbStack / Linux dockerd), `yq` ([mikefarah](https://github.com/mikefarah/yq) v4 — reads the YAML configs) |
 | Web panel (optional) | `go` ≥ 1.21 to build the daemon; `nmap` only for the LAN-discovery canvas |
-| Container image (built for you) | Alpine + `openconnect` + `strongswan` + `openssh-client` + `socat` + `microsocks` |
+| Container image (built for you) | Alpine + `openconnect` + `strongswan` + `openssh-client` + `socat` + `microsocks` + `nftables` |
+| Docker host kernel (`vpn` tunnels only) | nftables (`nf_tables`) with connection tracking, usable from a container with `NET_ADMIN`; for `protocol: ipsec` also the nftables IPsec match (`meta ipsec`). A `vpn` container that cannot load its filter stops with an error instead of running unfiltered; `ssh` and `local` tunnels need none of this. |
 
 ## Install
 
@@ -348,8 +351,25 @@ flowchart LR
 - **local** — no tunnel; plain `socat` relays (pin a LAN/remote host:port to a
   stable local port).
 
-Listeners bind the container's `eth0` (the Docker-published side) **only**, so
-nothing on the far side of a tunnel can reach a forward or the SOCKS proxy. The
+Listeners bind the container's `eth0` address (the Docker-published side)
+**only**. Linux would still deliver a packet for that address when it arrives
+through the tunnel, and the container's network namespace routes packets
+(`ip_forward=1`), so a `vpn` container loads an nftables filter before the
+tunnel starts:
+
+- replies to connections the container opened itself are accepted (connection
+  tracking), so the tunnel's own traffic is not affected;
+- anything else addressed to the `eth0` address is dropped unless it came in on
+  `eth0` (for IPsec, which has no tunnel interface: unless it came in outside
+  the IPsec tunnel);
+- nothing is forwarded: packets from the tunnel for other hosts on the Docker
+  side are dropped.
+
+The far side of a tunnel can therefore neither open a connection to a forward or
+the SOCKS proxy nor send packets through the container. If the filter cannot be
+loaded the container refuses to start (see [Requirements](#requirements)). The
+filter ships in the image: after updating, re-pull it or run `t-forward build` -
+an older local image keeps running without it. The
 host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)
 to share forwards on a trusted network.
 
