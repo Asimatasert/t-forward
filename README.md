@@ -122,6 +122,22 @@ nothing changed there is no rebuild and no extra delay. Notes:
 - The only network access of this check is that `docker pull` of the published
   image; nothing is pushed.
 
+### Verifying a release download
+
+If you download the `t-forward` script or the `t-forward-web-linux-*` binaries
+from a [release](https://github.com/Asimatasert/t-forward/releases) instead of
+cloning, check them against the `SHA256SUMS` file attached to the same release
+(releases published before it existed have none):
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS      # checks the files you downloaded
+gh attestation verify t-forward-web-linux-amd64 --repo Asimatasert/t-forward
+```
+
+The second command checks the signed build provenance (needs the GitHub CLI).
+Published assets are never replaced: re-running the release for an existing
+tag does not overwrite them.
+
 ## Configure
 
 One YAML file per tunnel in `~/.config/t-forward/conf.d/` — the file name is the

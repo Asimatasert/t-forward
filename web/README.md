@@ -14,6 +14,14 @@ TF_WEB_TOKEN=$(openssl rand -hex 16) ./t-forward-web            # prints the URL
 ./t-forward-web
 ```
 
+Prebuilt `t-forward-web-linux-amd64` / `-arm64` binaries are attached to each
+release together with a `SHA256SUMS` file. Verify a download before running it:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify t-forward-web-linux-amd64 --repo Asimatasert/t-forward
+```
+
 Flags: `--addr 127.0.0.1:8787`, `--token-file PATH`, `--tf t-forward`,
 `--config-dir ~/.config/t-forward`. The token is required on every request
 (header `X-Token` / `Authorization: Bearer`, or `?token=` on the initial
