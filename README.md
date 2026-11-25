@@ -473,7 +473,7 @@ real rootless daemon.) `userns-remap` is **not supported** (it was not on `main`
 either): the CLI also takes the root path when it sees `userns`, but this is
 untested and the host-owned auth dir may still be unreadable there.
 
-The CLI version is unchanged, so old and new CLI/image can be mixed:
+A CLI and an image from different sides of this change can still be mixed:
 
 - this CLI + an older image: falls back to the root behaviour above.
 - an older CLI + this image: the old CLI passes no `--user`, so `ssh`/`local`
