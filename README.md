@@ -94,6 +94,34 @@ The container image is pulled automatically from
 amd64 + arm64) on first `up`. To build it locally instead, run
 `./t-forward build` — or set `T_FORWARD_HUB_IMAGE=""` to always build.
 
+### Image updates
+
+A locally built image is labelled with a hash of its build inputs (`Dockerfile`
+and `entrypoint.sh`). On `up`, the CLI compares it with the files next to the
+script; after you update the repo and the hash differs, it prints one line
+(`Image ... is out of date ... rebuilding`) and rebuilds before starting. When
+nothing changed there is no rebuild and no extra delay. Notes:
+
+- Tunnels that are already running keep using the old image until you restart
+  them (`t-forward down NAME`, then `up`).
+- An image without the label that was built locally before this check existed
+  is treated as stale and rebuilt once.
+- An image that was pulled from the registry (the default install) is current
+  only while it is the same image as the local `asimatasert/t-forward:<CLI
+  version>`; the check is two local `docker image inspect` calls, no network.
+  After a CLI update to a newer version the old image is stale: the CLI prints
+  one line (`Image ... belongs to another version ...`), pulls the new version
+  and re-tags it. If the pull fails it builds locally when the repo files are
+  next to the script, otherwise it warns and keeps the existing image.
+- A failed refresh never blocks starting a tunnel: the CLI warns and starts with
+  the existing image. `t-forward build` forces a local rebuild at any time.
+- A custom `T_FORWARD_IMAGE` name follows the same rules: the CLI only ever
+  creates that image itself (by `build` or by tagging the pulled image), so an
+  unlabeled one is an old build or a pulled image and is refreshed as above.
+  With `T_FORWARD_HUB_IMAGE=""` nothing is ever pulled.
+- The only network access of this check is that `docker pull` of the published
+  image; nothing is pushed.
+
 ### Verifying a release download
 
 If you download the `t-forward` script or the `t-forward-web-linux-*` binaries
@@ -389,8 +417,10 @@ loaded the container refuses to start (see [Requirements](#requirements)). A hos
 whose kernel cannot load the filter therefore cannot run `vpn` tunnels at all,
 and there is deliberately no option to run without it; `ssh` and `local` tunnels
 are not affected. The
-filter ships in the image: after updating, re-pull it or run `t-forward build` -
-an older local image keeps running without it. The
+filter ships in the image. A locally built image from before the filter existed
+is rebuilt automatically on the next `up` (see
+[Image updates](#image-updates)); tunnels that are already running keep the old
+image until you restart them. The
 host port is `127.0.0.1` by default, or `T_FORWARD_BIND` (e.g. a Tailscale IP)
 to share forwards on a trusted network.
 
@@ -459,7 +489,7 @@ real rootless daemon.) `userns-remap` is **not supported** (it was not on `main`
 either): the CLI also takes the root path when it sees `userns`, but this is
 untested and the host-owned auth dir may still be unreadable there.
 
-The CLI version is unchanged, so old and new CLI/image can be mixed:
+A CLI and an image from different sides of this change can still be mixed:
 
 - this CLI + an older image: falls back to the root behaviour above.
 - an older CLI + this image: the old CLI passes no `--user`, so `ssh`/`local`
@@ -467,7 +497,8 @@ The CLI version is unchanged, so old and new CLI/image can be mixed:
   On Linux this can stop with "/auth is missing or not writable" until the CLI
   is updated.
 
-Update the CLI and run `t-forward build` together.
+Update the CLI; a locally built image is then rebuilt automatically on the next `up`
+(`t-forward build` does it explicitly; a pulled image is re-pulled for the new version).
 
 ## Security notes
 

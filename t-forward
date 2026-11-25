@@ -18,7 +18,7 @@
 
 set -u
 
-VERSION="0.8.0"
+VERSION="0.9.0"
 IMAGE="${T_FORWARD_IMAGE:-t-forward:latest}"
 # published multi-arch image pulled when $IMAGE is missing locally (set empty
 # to force a local build instead)
@@ -90,17 +90,99 @@ need_yq() {
         || die "yq not found. Install it: brew install yq  (mikefarah/yq v4)."
 }
 
+# Label carrying a hash of the build inputs (Dockerfile + entrypoint.sh) on a
+# locally built image, so a later CLI/repo update can tell the image is stale.
+SRC_LABEL="t-forward.src-hash"
+
+# Hash of everything the Dockerfile copies in. Empty (and the stale check is
+# skipped) when the build files are not next to this script (CLI-only install)
+# or no hash tool is available.
+src_hash() {
+    local dir
+    dir=$(script_dir)
+    [ -f "$dir/Dockerfile" ] && [ -f "$dir/entrypoint.sh" ] || return 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        cat "$dir/Dockerfile" "$dir/entrypoint.sh" | sha256sum | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        cat "$dir/Dockerfile" "$dir/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1
+    elif command -v cksum >/dev/null 2>&1; then
+        cat "$dir/Dockerfile" "$dir/entrypoint.sh" | cksum | tr -d ' '
+    fi
+}
+
+# Classify the existing $IMAGE; prints one word:
+#   current       nothing to do (or it cannot be judged)
+#   local-stale   a local build whose Dockerfile/entrypoint hash differs, or one
+#                 from before the label existed
+#   pulled-stale  a pulled image that is not the published $HUB_IMAGE:$VERSION
+# A locally built image carries the SRC_LABEL hash. An unlabeled image whose
+# repo digests name $HUB_IMAGE was pulled and tagged by ensure_image: it is
+# current only while it is the same image as the local $HUB_IMAGE:$VERSION (two
+# local inspects, no network). Any other unlabeled image is a local build from
+# before the label existed. Local builds can have repo digests too (containerd
+# image store), hence the name check.
+image_status() {
+    local want info have rest digests id cfg hub_id
+    want=$(src_hash)
+    # image ID and digests first: neither contains a `|`, the config JSON may.
+    # (`index .Config.Labels` errors on an image without labels, so read the
+    # whole config and pick the label out of it.)
+    info=$(docker image inspect -f '{{.Id}}|{{join .RepoDigests " "}}|{{json .Config}}' "$IMAGE" 2>/dev/null) \
+        || { echo current; return 0; }
+    id=${info%%|*}
+    rest=${info#*|}
+    digests=${rest%%|*}
+    cfg=${rest#*|}
+    have=$(printf '%s' "$cfg" | sed -n "s/.*\"$SRC_LABEL\":\"\([^\"]*\)\".*/\1/p")
+    if [ -n "$have" ]; then
+        if [ -z "$want" ] || [ "$have" = "$want" ]; then echo current; else echo local-stale; fi
+        return 0
+    fi
+    if [ -n "$HUB_IMAGE" ]; then
+        case " $digests" in
+            *" $HUB_IMAGE@"*|*"/$HUB_IMAGE@"*)
+                hub_id=$(docker image inspect -f '{{.Id}}' "$HUB_IMAGE:$VERSION" 2>/dev/null) || hub_id=""
+                if [ -n "$hub_id" ] && [ "$hub_id" = "$id" ]; then echo current; else echo pulled-stale; fi
+                return 0 ;;
+        esac
+    fi
+    if [ -n "$want" ]; then echo local-stale; else echo current; fi
+}
+
+# pull the published image for this CLI version and tag it as $IMAGE
+pull_published() {
+    docker pull "$HUB_IMAGE:$VERSION" >/dev/null 2>&1 || return 1
+    docker tag "$HUB_IMAGE:$VERSION" "$IMAGE"
+}
+
+# A failed refresh must never block starting a tunnel: warn and carry on with
+# the image that is already there.
 ensure_image() {
-    docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        case $(image_status) in
+            local-stale)
+                info "Image $IMAGE is out of date (Dockerfile/entrypoint changed); rebuilding. Running tunnels keep the old image until restarted."
+                ( cmd_build ) || warn "rebuild failed; continuing with the existing $IMAGE (run 't-forward build' to retry)"
+                ;;
+            pulled-stale)
+                info "Image $IMAGE belongs to another version than $VERSION; pulling $HUB_IMAGE:$VERSION. Running tunnels keep the old image until restarted."
+                pull_published && return 0
+                if [ -f "$(script_dir)/Dockerfile" ]; then
+                    info "pull failed; building locally..."
+                    ( cmd_build ) || warn "build failed; continuing with the existing $IMAGE (run 't-forward build' to retry)"
+                else
+                    warn "pull failed; continuing with the existing $IMAGE"
+                fi
+                ;;
+        esac
+        return 0
+    fi
     # Prefer the published multi-arch image (no build context needed — works
     # when only the CLI is installed); fall back to a local build when offline
     # or when HUB_IMAGE is unset.
     if [ -n "$HUB_IMAGE" ]; then
         info "Image $IMAGE not found; pulling $HUB_IMAGE:$VERSION..."
-        if docker pull "$HUB_IMAGE:$VERSION" >/dev/null 2>&1; then
-            docker tag "$HUB_IMAGE:$VERSION" "$IMAGE"
-            return 0
-        fi
+        pull_published && return 0
         info "pull failed; building locally..."
     else
         info "Image $IMAGE not found; building it..."
@@ -1009,8 +1091,14 @@ cmd_build() {
     dir=$(script_dir)
     [ -f "$dir/Dockerfile" ] \
         || die "Dockerfile not found next to this script ($dir). Run from the t-forward repo."
-    docker build -t "$IMAGE" "$dir" || die "image build failed"
-    info "built $IMAGE"
+    local hash
+    hash=$(src_hash)
+    if [ -n "$hash" ]; then
+        docker build --label "$SRC_LABEL=$hash" -t "$IMAGE" "$dir" || die "image build failed"
+    else
+        docker build -t "$IMAGE" "$dir" || die "image build failed"
+    fi
+    info "built $IMAGE (running tunnels keep the old image until restarted)"
 }
 
 cmd_menu() {
